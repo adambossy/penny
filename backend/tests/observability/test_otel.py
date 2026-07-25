@@ -78,7 +78,7 @@ async def test_agent_run_trace_via_subscriber(exporter):
     assert task is not None
 
     await bus.publish(RunStart(run_id="r1", agent_name="penny", prompt="how much?"))
-    await bus.publish(ModelStart(model_name="gemini-3.5-flash"))
+    await bus.publish(ModelStart(model_name="gemini-3.6-flash"))
     await bus.publish(MessageStart(message_id="m1"))
     await bus.publish(
         ToolExecStart(
@@ -111,7 +111,7 @@ async def test_agent_run_trace_via_subscriber(exporter):
 
     _, tree = _by_name(exporter)
     assert "penny-agent-run" in tree
-    assert "chat gemini-3.5-flash" in tree
+    assert "chat gemini-3.6-flash" in tree
     assert "execute_tool run_sql" in tree
 
     root, _ = tree["penny-agent-run"]
@@ -120,9 +120,9 @@ async def test_agent_run_trace_via_subscriber(exporter):
     assert tuple(root.attributes["langfuse.trace.tags"]) == ("chat",)
     assert root.attributes["langfuse.environment"] == "development"
 
-    gen, gen_parent = tree["chat gemini-3.5-flash"]
+    gen, gen_parent = tree["chat gemini-3.6-flash"]
     assert gen_parent == "penny-agent-run"
-    assert gen.attributes["gen_ai.request.model"] == "gemini-3.5-flash"
+    assert gen.attributes["gen_ai.request.model"] == "gemini-3.6-flash"
     assert gen.attributes["gen_ai.usage.input_tokens"] == 100
     assert gen.attributes["gen_ai.usage.output_tokens"] == 12
 

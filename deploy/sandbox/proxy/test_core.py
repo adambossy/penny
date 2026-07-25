@@ -62,7 +62,7 @@ async def test_key_injection_strips_capability_token() -> None:
 
         # A model call with the capability token.
         r = await c.post(
-            "/v1beta/models/gemini-3.5-flash:generateContent",
+            "/v1beta/models/gemini-3.6-flash:generateContent",
             headers={"authorization": "Bearer CAP1"},
             json={"contents": []},
         )

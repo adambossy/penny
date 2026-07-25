@@ -126,7 +126,7 @@ def test_record_run_items_and_watermark_roundtrip(tmp_path: Path) -> None:
         cohort_size=1,
         cohort_max_created_at=datetime(2026, 6, 3, 8, 0),
         branch_name="eval/2026-06-27",
-        version={"model": "gemini-3.5-flash", "prompt_version": "1"},
+        version={"model": "gemini-3.6-flash", "prompt_version": "1"},
     )
     db.record_eval_items(
         run_id,
@@ -151,7 +151,7 @@ def test_record_run_items_and_watermark_roundtrip(tmp_path: Path) -> None:
     with db.session() as session:
         run = session.get(EvalRun, run_id)
         assert run.status == "completed"
-        assert run.model == "gemini-3.5-flash"
+        assert run.model == "gemini-3.6-flash"
         assert run.r2_fixture_url == "r2://bucket/eval/2026-06-27.sqlite.gz"
         items = session.query(EvalItem).filter(EvalItem.eval_run_id == run_id).all()
         assert len(items) == 1

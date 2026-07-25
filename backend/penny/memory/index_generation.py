@@ -8,7 +8,7 @@ from typing import Any
 
 from promptorium import load_prompt
 
-DEFAULT_MEMORY_INDEX_MODEL = "gemini-3.5-flash"
+DEFAULT_MEMORY_INDEX_MODEL = "gemini-3.6-flash"
 DEFAULT_MEMORY_INDEX_PROMPT_KEY = "generate-memory-index"
 _REQUIRED_HEADINGS = (
     "# Memory Index",

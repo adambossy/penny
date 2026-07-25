@@ -134,7 +134,7 @@ def test_llm_categorization_writes_categorization_reasoning(tmp_path: Path) -> N
         {
             "category_id": groceries,
             "category_method": "llm",
-            "category_model": "gemini-3.5-flash",
+            "category_model": "gemini-3.6-flash",
             "category_reason": "Whole Foods is a grocery store.",
         },
     )

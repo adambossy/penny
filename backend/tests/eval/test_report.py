@@ -41,11 +41,11 @@ def test_disagreements() -> None:
 
 def test_render_is_self_contained_html() -> None:
     html_doc = render_eval_report(
-        _ITEMS, run_at="2026-06-27T00:00:00", version={"model": "gemini-3.5-flash"}
+        _ITEMS, run_at="2026-06-27T00:00:00", version={"model": "gemini-3.6-flash"}
     )
     assert html_doc.startswith("<!doctype html>")
     assert "Categorizer eval" in html_doc
     assert "1 disagreement(s)" in html_doc
-    assert "model=gemini-3.5-flash" in html_doc
+    assert "model=gemini-3.6-flash" in html_doc
     # payload embedded for the pager
     assert "WHOLE FOODS" in html_doc

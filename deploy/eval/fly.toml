@@ -31,8 +31,8 @@ primary_region = "iad"  # US East — close to the Neon prod DB.
 [env]
   PYTHONUNBUFFERED = "1"
   PENNY_AGENT_PROVIDER = "gemini"
-  PENNY_AGENT_MODEL = "gemini-3.5-flash"
-  PENNY_CATEGORIZER_MODEL = "gemini-3.5-flash"
+  PENNY_AGENT_MODEL = "gemini-3.6-flash"
+  PENNY_CATEGORIZER_MODEL = "gemini-3.6-flash"
   PENNY_WORKSPACE = "/app/.transactoid"
 
 # Job-only: no always-on machine. The cron-manager creates the ephemeral
