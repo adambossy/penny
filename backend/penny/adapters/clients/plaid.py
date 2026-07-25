@@ -93,6 +93,39 @@ class AccountsGetResponse(PlaidBaseModel):
     accounts: list[AccountsGetAccount]
 
 
+class AccountBalances(PlaidBaseModel):
+    """An account's point-in-time balances, as Plaid reports them.
+
+    Sign follows the account type: depository/investment balances are positive
+    holdings, while credit and loan balances are positive amounts *owed*.
+    ``available`` and ``limit`` are frequently null — plenty of institutions
+    report neither.
+    """
+
+    available: float | None = None
+    current: float | None = None
+    limit: float | None = None
+    iso_currency_code: str | None = None
+    unofficial_currency_code: str | None = None
+    # When the institution last refreshed these figures. Plaid only populates
+    # it for investment accounts and a subset of institutions.
+    last_updated_datetime: str | None = None
+
+
+class BalanceAccount(PlaidBaseModel):
+    account_id: str
+    name: str
+    official_name: str | None = None
+    mask: str | None = None
+    subtype: str | None = None
+    type: str | None = None
+    balances: AccountBalances = Field(default_factory=AccountBalances)
+
+
+class AccountsBalanceGetResponse(PlaidBaseModel):
+    accounts: list[BalanceAccount] = Field(default_factory=list)
+
+
 class ItemModel(PlaidBaseModel):
     item_id: str
     institution_id: str | None = None
@@ -474,6 +507,26 @@ class PlaidClient:
         }
         resp = AccountsGetResponse.parse(self._post("/accounts/get", payload))
         return [account.to_typed() for account in resp.accounts]
+
+    def get_balances(self, access_token: str) -> list[BalanceAccount]:
+        """Return every account on an item together with its current balances.
+
+        Uses /accounts/balance/get rather than /accounts/get: the former forces
+        a live balance pull from the institution, while the latter may serve
+        Plaid's cached copy from the last transactions update. That freshness is
+        the whole point for balance capture, and it costs an extra round trip to
+        the bank — expect this call to be slow and to fail for items needing
+        re-authentication.
+        """
+        payload: dict[str, Any] = {
+            "client_id": self._client_id,
+            "secret": self._secret,
+            "access_token": access_token,
+        }
+        resp = AccountsBalanceGetResponse.parse(
+            self._post("/accounts/balance/get", payload)
+        )
+        return resp.accounts
 
     def get_item_info(self, access_token: str) -> PlaidItemInfo:
         """Return item and institution information for an access token."""
