@@ -363,7 +363,10 @@ function Chat({
 
   return (
     <div className="flex h-full w-full flex-col bg-background text-foreground">
-      <div ref={transcriptRef} className="flex-1 overflow-y-auto">
+      {/* `relative` contains absolutely-positioned descendants (e.g. the
+          sr-only session-mode marker) — unpositioned, they'd escape this
+          scroller's overflow and stretch the document past the composer. */}
+      <div ref={transcriptRef} className="relative flex-1 overflow-y-auto">
         {/* data-testid/data-role: stable hooks for the Playwright specs. */}
         <div data-testid="transcript" className="mx-auto max-w-3xl px-3 pt-2 pb-2 sm:px-4">
           {showEmpty ? (
