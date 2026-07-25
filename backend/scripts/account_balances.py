@@ -62,9 +62,12 @@ class BalanceRow:
 def _collect(db: DB, client: PlaidClient) -> tuple[list[BalanceRow], list[str]]:
     """Fetch balances for every stored item.
 
-    A broken item (most often ``ITEM_LOGIN_REQUIRED``) is reported as its own
-    row rather than aborting the run — a single stale connection should not hide
-    the balances of every healthy one.
+    A broken item is reported as its own row rather than aborting the run — a
+    single bad connection should not hide the balances of every healthy one.
+    Two failures are routine enough to expect: ``ITEM_LOGIN_REQUIRED`` from
+    Plaid, and a ``ValueError`` from the token cipher when this environment has
+    no ``PENNY_PLAID_TOKEN_KEY`` for the version the stored token was written
+    under.
     """
     rows: list[BalanceRow] = []
     notes: list[str] = []
@@ -73,7 +76,7 @@ def _collect(db: DB, client: PlaidClient) -> tuple[list[BalanceRow], list[str]]:
         institution = item.institution_name or item.item_id[:12]
         try:
             accounts = client.get_balances(item.access_token)
-        except PlaidClientError as exc:
+        except (PlaidClientError, ValueError) as exc:
             notes.append(f"{institution}: {exc}")
             rows.append(
                 BalanceRow(
