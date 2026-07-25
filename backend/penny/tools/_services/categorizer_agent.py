@@ -42,7 +42,7 @@ from penny.workspace import resolve_workspace_dir
 
 # Provider-native web_search for the agent. Passed via ``ModelSettings.builtin_tools``,
 # which the harness appends to the wire tools list alongside the function tools (so the
-# agent keeps submit_categorization etc.). gemini-3.5-flash is the default model, so we
+# agent keeps submit_categorization etc.). gemini-3.6-flash is the default model, so we
 # use Google's grounding tool. This coexists with function calling (the JSON-output vs
 # grounding exclusivity only applies to response_mime_type, which we don't use).
 _GEMINI_WEB_SEARCH_TOOL: dict[str, Any] = {"google_search": {}}
@@ -102,7 +102,7 @@ def build_categorizer_agent() -> Agent:
 
     return Agent(
         name="categorizer",
-        model=build_model(),  # gemini-3.5-flash
+        model=build_model(),  # gemini-3.6-flash
         instructions=_render_categorizer_prompt(),
         session=None,
         persist_session=False,

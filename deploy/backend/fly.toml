@@ -29,8 +29,8 @@ primary_region = "iad"  # US East — close to the Neon/Supabase prod DB.
   # Environment tier (code default is already production; explicit for legibility).
   PENNY_ENV = "production"
   PENNY_AGENT_PROVIDER = "gemini"
-  PENNY_AGENT_MODEL = "gemini-3.5-flash"
-  PENNY_CATEGORIZER_MODEL = "gemini-3.5-flash"
+  PENNY_AGENT_MODEL = "gemini-3.6-flash"
+  PENNY_CATEGORIZER_MODEL = "gemini-3.6-flash"
   PLAID_ENV = "production"
   PENNY_SENTRY_ENVIRONMENT = "production"
 

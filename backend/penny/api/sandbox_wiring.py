@@ -124,7 +124,7 @@ def _build_payload(
         "seed_messages": seed_messages,
         "model": {
             "provider": "google",
-            "name": "gemini-3.5-flash",
+            "name": "gemini-3.6-flash",
             "base_url": proxy_url,
             "capability_token": proxy_token,
             "thinking_budget": -1,

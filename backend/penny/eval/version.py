@@ -20,7 +20,7 @@ _PROMPTS_META = _BACKEND_ROOT / ".prompts" / "_meta.json"
 _TAXONOMY_YAML = _BACKEND_ROOT / "configs" / "taxonomy.yaml"
 
 _CATEGORIZER_PROMPT_KEY = "categorize-transaction-agent"
-_DEFAULT_MODEL = "gemini-3.5-flash"
+_DEFAULT_MODEL = "gemini-3.6-flash"
 
 
 def _prompt_version(key: str) -> str | None:

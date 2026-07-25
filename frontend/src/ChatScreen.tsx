@@ -12,7 +12,7 @@ import { OtherUserMessage } from "./OtherUserMessage";
 import { conversationPath } from "./routes";
 import { useHouseholdMembers } from "./useHouseholdMembers";
 
-const MODEL = "gemini-3.5-flash";
+const MODEL = "gemini-3.6-flash";
 
 type SessionMode = "individual" | "joint";
 
@@ -452,7 +452,7 @@ function Chat({
           // chat. The route re-renders with `draft` false, so this runs once.
           if (draft) void navigate(conversationPath(sessionId), { replace: true });
         }}
-        modelLabel="Gemini 3.5 Flash"
+        modelLabel="Gemini 3.6 Flash"
         footerHint="Penny can make mistakes — verify important numbers"
       />
     </div>

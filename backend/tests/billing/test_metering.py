@@ -22,7 +22,7 @@ def _ctx(user: str = "11111111-1111-1111-1111-111111111111") -> RequestContext:
 
 def _usage(cost_dollars: float) -> ModelUsage:
     return ModelUsage(
-        model_name="gemini-3.5-flash",
+        model_name="gemini-3.6-flash",
         usage=Usage(input_tokens=1000, output_tokens=500),
         cost=Cost(input_cost=cost_dollars),
     )

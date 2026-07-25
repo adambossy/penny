@@ -53,7 +53,7 @@ def _seed_source(tmp_path: Path) -> DB:
                 from_category_key=None,
                 to_category_key="food.groceries",
                 method="llm",
-                model="gemini-3.5-flash",
+                model="gemini-3.6-flash",
                 categorization_reasoning="grocery store",
                 created_at=datetime(2026, 1, 10, 12, 0),
             )

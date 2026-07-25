@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 # 503s; the sweep is cursor-independent so throughput is not the constraint.
 _CATEGORIZE_CONCURRENCY = 3
 # Recorded on sibling rows that reuse a deduped agent decision.
-_CATEGORIZER_MODEL = "gemini-3.5-flash"
+_CATEGORIZER_MODEL = "gemini-3.6-flash"
 
 # Plaid item-error codes that mean "the user must re-authenticate this bank" (as
 # opposed to a transient/network blip). A sync hitting one of these reports the

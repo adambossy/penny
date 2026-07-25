@@ -154,7 +154,7 @@ def build_model(*, credential: Credential | None = None) -> GeminiModel:
     # Pin the model name explicitly (harness default is GEMINI_3_5_FLASH) so it
     # is visible in review.
     return GeminiModel(
-        provider=GoogleProvider(credential=credential), name="gemini-3.5-flash"
+        provider=GoogleProvider(credential=credential), name="gemini-3.6-flash"
     )
 
 

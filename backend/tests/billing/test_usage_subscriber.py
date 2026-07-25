@@ -24,7 +24,7 @@ def _ctx() -> RequestContext:
 
 def _usage(cents: int) -> ModelUsage:
     return ModelUsage(
-        model_name="gemini-3.5-flash",
+        model_name="gemini-3.6-flash",
         usage=Usage(input_tokens=100, output_tokens=50),
         cost=Cost(input_cost=cents / 100),
     )
