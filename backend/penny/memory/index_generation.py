@@ -8,7 +8,8 @@ from typing import Any
 
 from promptorium import load_prompt
 
-DEFAULT_MEMORY_INDEX_MODEL = "gemini-3.6-flash"
+from penny.config import agent_model
+
 DEFAULT_MEMORY_INDEX_PROMPT_KEY = "generate-memory-index"
 _REQUIRED_HEADINGS = (
     "# Memory Index",
@@ -30,10 +31,14 @@ class MemoryIndexSyncResult:
 def generate_memory_index_markdown(
     *,
     memory_dir: Path,
-    model: str = DEFAULT_MEMORY_INDEX_MODEL,
+    model: str | None = None,
     prompt_key: str = DEFAULT_MEMORY_INDEX_PROMPT_KEY,
 ) -> str:
-    """Generate memory/index.md content from the current memory directory."""
+    """Generate memory/index.md content from the current memory directory.
+
+    ``model`` defaults to the agent model (``PENNY_AGENT_MODEL``).
+    """
+    model = model or agent_model()
     generation_prompt = _load_generation_prompt(prompt_key=prompt_key)
     memory_tree = _build_memory_tree(memory_dir=memory_dir)
     tracked_files = _tracked_memory_files(memory_dir=memory_dir)
@@ -56,11 +61,12 @@ def generate_memory_index_markdown(
 def sync_memory_index(
     *,
     memory_dir: Path,
-    model: str = DEFAULT_MEMORY_INDEX_MODEL,
+    model: str | None = None,
     prompt_key: str = DEFAULT_MEMORY_INDEX_PROMPT_KEY,
     force: bool = False,
 ) -> MemoryIndexSyncResult:
     """Generate and update memory/index.md only when content has changed."""
+    model = model or agent_model()
     generated = generate_memory_index_markdown(
         memory_dir=memory_dir,
         model=model,

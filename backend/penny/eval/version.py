@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from pathlib import Path
 import subprocess
+
+from penny.config import categorizer_model
 
 # backend/penny/eval/version.py -> backend/
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -20,7 +21,6 @@ _PROMPTS_META = _BACKEND_ROOT / ".prompts" / "_meta.json"
 _TAXONOMY_YAML = _BACKEND_ROOT / "configs" / "taxonomy.yaml"
 
 _CATEGORIZER_PROMPT_KEY = "categorize-transaction-agent"
-_DEFAULT_MODEL = "gemini-3.6-flash"
 
 
 def _prompt_version(key: str) -> str | None:
@@ -78,9 +78,8 @@ def version_stamp() -> dict[str, str | None]:
     Keys match the ``eval_runs`` version columns: ``model``, ``prompt_version``,
     ``harness_sha``, ``taxonomy_version``, ``rules_version``.
     """
-    model = os.environ.get("PENNY_CATEGORIZER_MODEL", "").strip() or _DEFAULT_MODEL
     return {
-        "model": model,
+        "model": categorizer_model(),
         "prompt_version": _prompt_version(_CATEGORIZER_PROMPT_KEY),
         "harness_sha": _git_sha(),
         "taxonomy_version": _file_hash(_TAXONOMY_YAML),

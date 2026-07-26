@@ -29,6 +29,30 @@ def penny_env() -> Environment:
     return value  # type: ignore[return-value]
 
 
+# The Gemini model Penny runs on when no env override is set. Single source of
+# truth for the default — every module that needs a model name resolves it
+# through agent_model()/categorizer_model() below rather than pinning its own.
+DEFAULT_AGENT_MODEL = "gemini-3.6-flash"
+
+
+def agent_model() -> str:
+    """The chat agent's model name (``PENNY_AGENT_MODEL``).
+
+    Falls back to :data:`DEFAULT_AGENT_MODEL`; never raises, so best-effort
+    consumers (eval stamps, metadata) can call it safely.
+    """
+    return os.environ.get("PENNY_AGENT_MODEL", "").strip() or DEFAULT_AGENT_MODEL
+
+
+def categorizer_model() -> str:
+    """The categorizer's model name (``PENNY_CATEGORIZER_MODEL``).
+
+    Falls back to the agent model, so setting only ``PENNY_AGENT_MODEL``
+    moves both; the categorizer var exists to diverge them deliberately.
+    """
+    return os.environ.get("PENNY_CATEGORIZER_MODEL", "").strip() or agent_model()
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeConfig:
     """Runtime provider configuration loaded at process startup."""
@@ -101,7 +125,7 @@ def load_runtime_config_from_env() -> RuntimeConfig:
     model_default_map = {
         "openai": "gpt-5.5",
         "claude": "",
-        "gemini": "gemini-3.1-pro-preview",
+        "gemini": DEFAULT_AGENT_MODEL,
         "langgraph": "gemini-3-flash-preview",
     }
     default_model = model_default_map[provider]
