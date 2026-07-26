@@ -361,8 +361,9 @@ function Chat({
   //      part on the assistant message — surface those too.
   const surfacedError = errorMessage(error) || findStreamError(messages as AiUIMessage[]);
 
+  // pb-10: lift the composer + footer hint 40px off the bottom edge.
   return (
-    <div className="flex h-full w-full flex-col bg-background text-foreground">
+    <div className="flex h-full w-full flex-col bg-background pb-10 text-foreground">
       {/* `relative` contains absolutely-positioned descendants (e.g. the
           sr-only session-mode marker) — unpositioned, they'd escape this
           scroller's overflow and stretch the document past the composer. */}
