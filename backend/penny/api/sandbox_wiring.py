@@ -48,6 +48,7 @@ from protocol.events import decode_envelope
 
 from penny import observability
 from penny.agent_factory import _render_system_prompt
+from penny.config import agent_model
 from penny.sandboxes.provider import ModalSandboxProvider
 from penny.sandboxes.reaper import SandboxBusy, dispatch_turn, on_turn_end
 from penny.sandboxes.relay import relay_turn
@@ -124,7 +125,7 @@ def _build_payload(
         "seed_messages": seed_messages,
         "model": {
             "provider": "google",
-            "name": "gemini-3.6-flash",
+            "name": agent_model(),
             "base_url": proxy_url,
             "capability_token": proxy_token,
             "thinking_budget": -1,

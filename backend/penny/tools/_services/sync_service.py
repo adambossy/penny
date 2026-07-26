@@ -14,6 +14,7 @@ from sqlalchemy.orm import make_transient
 from penny.adapters.clients.plaid import PlaidClient, PlaidClientError
 from penny.adapters.clients.plaid_models import Transaction
 from penny.adapters.db.facade import DB
+from penny.config import categorizer_model
 from penny.normalizer import MerchantNormalizer, choose_normalizer_input
 from penny.taxonomy.core import Taxonomy
 from penny.tools._base import StandardTool
@@ -39,8 +40,6 @@ if TYPE_CHECKING:
 # with per-call retries) left rows uncategorized. Fewer in flight → far fewer
 # 503s; the sweep is cursor-independent so throughput is not the constraint.
 _CATEGORIZE_CONCURRENCY = 3
-# Recorded on sibling rows that reuse a deduped agent decision.
-_CATEGORIZER_MODEL = "gemini-3.6-flash"
 
 # Plaid item-error codes that mean "the user must re-authenticate this bank" (as
 # opposed to a transient/network blip). A sync hitting one of these reports the
@@ -860,7 +859,9 @@ class SyncTool:
                 self._db.bulk_update_derived_categories(
                     dict.fromkeys(siblings, category_id),
                     method="llm",
-                    model=_CATEGORIZER_MODEL,
+                    # Recorded on sibling rows that reuse a deduped agent
+                    # decision — the model the sweep's categorizer agent ran.
+                    model=categorizer_model(),
                     reason=(
                         decision.get("reasoning")
                         or "Reused the agent decision for an identical merchant "

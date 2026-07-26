@@ -18,6 +18,8 @@ class ModelConfig(BaseModel):
     """Which model to run, and where to reach it (the secrets proxy)."""
 
     provider: str = "google"  # "google" | "anthropic" | "openai"
+    # Wire-schema fallback only: the backend always sends an explicit name
+    # (resolved from PENNY_AGENT_MODEL via penny.config.agent_model).
     name: str = "gemini-3.6-flash"
     base_url: str | None = None  # the proxy URL; None means direct (dev only)
     # The capability token the proxy accepts in place of a real API key.

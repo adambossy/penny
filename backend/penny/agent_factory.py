@@ -26,6 +26,7 @@ from agent_harness.providers.google import GeminiModel, GoogleProvider
 from agent_harness.sandboxes.inprocess import InProcessSandbox
 from agent_harness.sessions.inmemory import InMemorySession
 
+from .config import agent_model
 from .plugins.amazon import build_amazon_toolset
 from .prompts import load_prompt
 from .sandbox import get_sandbox
@@ -132,7 +133,9 @@ def _render_system_prompt(
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent  # .../backend/
 
 
-def build_model(*, credential: Credential | None = None) -> GeminiModel:
+def build_model(
+    *, credential: Credential | None = None, name: str | None = None
+) -> GeminiModel:
     """Build a FRESH Gemini model — one provider per request, never shared.
 
     The harness resolves a run's credential by mutating the provider client
@@ -151,10 +154,11 @@ def build_model(*, credential: Credential | None = None) -> GeminiModel:
         if not api_key:
             raise RuntimeError("GOOGLE_API_KEY is not set")
         credential = ApiKeyCredential(provider="google", key=api_key)
-    # Pin the model name explicitly (harness default is GEMINI_3_5_FLASH) so it
-    # is visible in review.
+    # Always name the model explicitly (PENNY_AGENT_MODEL, or the caller's
+    # override — e.g. the categorizer's PENNY_CATEGORIZER_MODEL) so the harness
+    # default never silently applies.
     return GeminiModel(
-        provider=GoogleProvider(credential=credential), name="gemini-3.6-flash"
+        provider=GoogleProvider(credential=credential), name=name or agent_model()
     )
 
 
