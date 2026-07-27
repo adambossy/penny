@@ -52,3 +52,6 @@ dist/
 .DS_Store
 *.log
 *.tsbuildinfo
+
+# Impeccable design-hook cache (local)
+.impeccable/hook.cache.json

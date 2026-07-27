@@ -15,8 +15,8 @@ export const tokens = {
   orange: "#D69E3D",
   orangeSoft: "#E3B255",
 
-  fontDisplay: "'Fraunces',Georgia,serif",
-  fontSerif: "'Cormorant Garamond','Fraunces',Georgia,serif",
+  fontDisplay: "'Archivo','Helvetica Neue',Arial,sans-serif",
+  fontSerif: "'Literata',Georgia,serif",
   fontUi: "'Work Sans',system-ui,sans-serif",
 } as const;
 

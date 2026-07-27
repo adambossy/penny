@@ -16,63 +16,60 @@
   --color-orange: #D69E3D;
   --color-orange-soft: #E3B255;
 
-  --font-display: 'Fraunces',Georgia,serif;
-  --font-serif: 'Cormorant Garamond','Fraunces',Georgia,serif;
+  /* Archivo (variable, wght 100–900 AND wdth 62–125) is the document voice:
+     the lettering of ledger heads, bank forms, and column rules. Its width axis
+     is the point — see the `statement` / `column-label` utilities below. */
+  --font-display: 'Archivo','Helvetica Neue',Arial,sans-serif;
+  /* Literata (variable) is the annotation voice: the reading face for
+     marginalia, notes, and the wordmark. Document-native, not display-decorative. */
+  --font-serif: 'Literata',Georgia,serif;
   --font-ui: 'Work Sans',system-ui,sans-serif;
 
-  /* Landing-page reveal: rise up + fade in. Pair with motion-reduce:animate-none. */
-  --animate-rise-in: rise-in 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+  /* Ledger motion: a figure is POSTED to a line, and a rule is DRAWN across it.
+     Both start from a visible default (see .posted below) so the page reads
+     fully without JS and under prefers-reduced-motion. */
+  --animate-post: post 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
 
-  @keyframes rise-in {
+  @keyframes post {
     from {
       opacity: 0;
-      transform: translateY(26px);
+      transform: translateY(9px);
     }
     to {
       opacity: 1;
       transform: none;
     }
   }
+
+  @keyframes rule-draw {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
 }
 
 /* Self-hosted woff2 (latin subset) — keeps the package portable and removes the
    CDN/privacy dependency. font-display: swap so text paints in the fallback
-   immediately. Fraunces / Cormorant Garamond / Work Sans are shipped as their
-   variable files; each @font-face pins the weight the template uses. */
+   immediately. Archivo and Literata ship as single VARIABLE files (one request
+   each covers every weight, and for Archivo every width); Work Sans is still
+   pinned per static weight. */
 @font-face {
-  font-family: 'Fraunces';
+  font-family: 'Archivo';
   font-style: normal;
-  font-weight: 400;
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
   font-display: swap;
-  src: url('./assets/fonts/fraunces-400.woff2') format('woff2');
+  src: url('./assets/fonts/archivo-var.woff2') format('woff2');
 }
 @font-face {
-  font-family: 'Fraunces';
+  font-family: 'Literata';
   font-style: normal;
-  font-weight: 600;
+  font-weight: 200 900;
   font-display: swap;
-  src: url('./assets/fonts/fraunces-600.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'Fraunces';
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url('./assets/fonts/fraunces-700.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'Cormorant Garamond';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url('./assets/fonts/cormorant-garamond-500.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'Cormorant Garamond';
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url('./assets/fonts/cormorant-garamond-600.woff2') format('woff2');
+  src: url('./assets/fonts/literata-var.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Work Sans';
@@ -96,13 +93,78 @@
   src: url('./assets/fonts/work-sans-600.woff2') format('woff2');
 }
 
-/* Brand motifs shared by marketing surfaces. */
+/* ── Ledger type system ────────────────────────────────────────────────────
+   Archivo is used ONLY at its width extremes, never near normal width, so it
+   can never be mistaken for (or muddle against) Work Sans running as UI text.
+   Two registers, and no third:
+     `statement`     — extended caps that HEAD a spread or name a total
+     `column-label`  — condensed caps that LABEL a column or a line item        */
 
-/* Subtle dotted-paper texture; pair with `pointer-events-none fixed inset-0`. */
-@utility grain {
-  background-image: radial-gradient(var(--color-navy) 0.6px, transparent 0.6px);
-  background-size: 18px 18px;
-  opacity: 0.05;
+@utility statement {
+  font-family: var(--font-display);
+  font-stretch: 118%;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.005em;
+  line-height: 0.94;
+}
+
+@utility column-label {
+  font-family: var(--font-display);
+  font-stretch: 64%;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.085em;
+}
+
+/* Money has to align down a column — every figure on this surface is tabular.
+   `lining-nums` keeps Literata from dropping to old-style figures in tables. */
+@utility tnum {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* ── Ledger rules ─────────────────────────────────────────────────────────
+   Structure IS the ornament here: this surface has no decorative texture, so
+   the only lines on the page are ones that carry accounting meaning. */
+
+/* The accountant's total: a double rule under a summed figure. */
+@utility rule-total {
+  border-top: 3px double currentColor;
+}
+
+/* Ruled ledger paper, on the 32px row rhythm the artifact tables use. Apply to
+   a panel that actually posts rows on that rhythm — never as a page overlay,
+   where the rules would not line up with anything. */
+@utility ruled {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 31px,
+    color-mix(in srgb, var(--color-navy) 9%, transparent) 31px 32px
+  );
+}
+
+/* ── Posting animation ────────────────────────────────────────────────────
+   Content is visible by default; `.posted` is added by an IntersectionObserver
+   and only then does anything move, so no-JS and reduced-motion readers get the
+   finished ledger rather than a blank one. */
+.post-target {
+  opacity: 1;
+}
+
+.posted .post-target {
+  animation: var(--animate-post);
+}
+
+.posted .rule-target {
+  animation: rule-draw 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: left center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .posted .post-target,
+  .posted .rule-target {
+    animation: none;
+  }
 }
 
 /* Brand text selection (template's ::selection treatment), scoped to

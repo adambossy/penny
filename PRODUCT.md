@@ -172,10 +172,12 @@ and "member" as an entity name.
   categorized transactions.
 - A working, deployed product (backend, frontend, cron-manager, and a
   categorizer-eval app), with real scheduled email reports going out.
-- Hand-authored demo conversations in `frontend/src/home/demos.tsx`, used on the
-  marketing page as illustrations of Penny's reasoning. These are written
-  examples, not captured transcripts from real users, and must not be presented
-  as the latter.
+- Hand-authored worked examples in `frontend/src/home/artifacts.tsx` — the
+  charts and ledger tables the marketing page uses to show the shape of Penny's
+  answers. Their figures are internally consistent by construction, which is
+  precisely why they must never be presented as a real household's results:
+  they are authored illustrations, not captured output, and every panel that
+  renders them carries an "Illustrative figures" marker.
 
 **Absent — future work must not fabricate any of it.** Penny is pre-launch,
 with the author as its only real user. There are **no** testimonials, quotes,

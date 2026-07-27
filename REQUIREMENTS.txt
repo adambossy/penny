@@ -132,13 +132,23 @@ P12. Progressive agent-embedded onboarding
 
 P13. Public logged-out home page
     A signed-out visitor to `/` sees a public marketing home page in the cream
-    design system — hero with sample prompts, a six-part feature tour with demo
-    conversations, and a closing call-to-action — rather than a bare sign-in
-    form. Every call-to-action routes to sign-up/sign-in (P10 open signup); the
-    sign-in and sign-up screens live at /sign-in and /sign-up and carry the
-    same design system (P11). Signed-out deep links to app screens still land
-    on sign-in. Copy is expected to iterate; the page structure and CTA routing
-    are the requirement (guardrail: frontend/e2e/home.spec.ts).
+    design system — an opening with sample prompts, a six-part tour of the
+    capabilities in P2–P5, and a closing call-to-action — rather than a bare
+    sign-in form. Each of the six parts carries a worked example of what Penny
+    returns (a data graphic or a ledger table), not a claim about it. Every
+    call-to-action routes to sign-up/sign-in (P10 open signup); the sign-in and
+    sign-up screens live at /sign-in and /sign-up and carry the same design
+    system (P11). Signed-out deep links to app screens still land on sign-in.
+    Copy is expected to iterate; the page structure and CTA routing are the
+    requirement (guardrail: frontend/e2e/home.spec.ts).
+
+P13a. No fabricated proof on public surfaces
+    Penny is pre-launch, so no public surface may present testimonials, named
+    customers, user or household counts, growth/usage metrics, press, awards,
+    or benchmarks — none exist, and none may be invented to fill a layout.
+    Every figure shown as an example of Penny's output is authored illustrative
+    sample data and is labelled as such where it renders, so it can never be
+    mistaken for a real household's ledger. See PRODUCT.md ("Evidence on Hand").
 
 
 TECHNICAL INVARIANTS / CONSTRAINTS
