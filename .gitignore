@@ -45,6 +45,9 @@ dist/
 # Python packaging metadata
 *.egg-info/
 
+# Impeccable live-mode recovery journal (local session state, not project source)
+.impeccable/live/sessions/
+
 # OS / editor
 .DS_Store
 *.log
