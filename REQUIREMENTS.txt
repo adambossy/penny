@@ -6,8 +6,13 @@ non-negotiable rules it must hold (Technical Invariants / Constraints).
 
 Maintained per the directive in AGENTS.md ("Requirements"): update the
 relevant section in the SAME change that alters a behaviour or a constraint.
-This file states WHAT and WHY, not HOW — implementation detail lives in
-AGENTS.md / AGENTS.local.md and the code.
+This file states WHAT and WHY, not HOW.
+
+Penny is a SINGLE-PLAYER, LOCALLY HOSTED product: one user, their own
+machine, their own database. The hosted multi-tenant product (auth, billing,
+households, tenant isolation, cloud deploy) is a separate private repo —
+penny-web — that layers on top of this core via its composition seams. See
+docs/superpowers/specs/2026-07-27-single-player-local-first-design.md.
 
 
 PRODUCT / FUNCTIONAL REQUIREMENTS
@@ -15,14 +20,14 @@ PRODUCT / FUNCTIONAL REQUIREMENTS
 
 P1. Transaction sync
     Sync bank/card transactions from every connected Plaid item into the
-    finance database. Sync is re-runnable and idempotent; the immutable Plaid
+    local database. Sync is re-runnable and idempotent; the immutable Plaid
     record and the derived/analytical record are kept distinct. One item whose
     connection is broken (e.g. an expired login needing re-authentication) must
     not abort the other items' sync or the end-of-run categorization — the
     failure is recorded and reported, not raised. Connections needing
-    re-authentication are surfaced to the user: at the top of email reports as a
-    plain-text banner, and in chat as an inline Plaid relink card (update mode)
-    that restores the existing connection so syncing resumes.
+    re-authentication are surfaced to the user: at the top of email reports as
+    a plain-text banner, and in chat as an inline Plaid relink card (update
+    mode) that restores the existing connection so syncing resumes.
 
 P2. Categorization
     Categorize each transaction with an LLM against the two-level taxonomy.
@@ -32,282 +37,187 @@ P3. Conversational finance Q&A
     Answer natural-language questions about the user's finances through a
     streaming chat UI, driving the agent over the user's own data.
 
-P4. Scheduled reports
-    Deliver recurring spending reports by email: a daily report (rolled up to
-    monthly on the 1st of the month) and a weekly report. Reports are produced
-    by the same agent that powers chat and delivered via its own email tool.
+P4. Scheduled reports & the daemon
+    Deliver a recurring weekly spending report by email, produced by the same
+    agent that powers chat and sent via its own email tool over the user's
+    configured SMTP. Scheduled work (sync every N hours, the weekly report)
+    is run by a local daemon (`penny daemon`) installed as a user service at
+    onboarding; `penny serve --all-in-one` co-runs it for casual use. Job
+    state (last run, outcome) is inspectable via `penny daemon status` and
+    the agent's `sync_status` tool. Report recipients come from configuration
+    only — never from the prompt or the model.
 
 P5. Amazon itemization
     Optionally enrich Amazon transactions by scraping order detail so spending
     is attributed per item rather than per lump charge.
 
 P6. Conversation persistence
-    Persist conversations and messages so chat history survives across sessions.
-    The signed-in user can browse their conversation history (newest-first) from
-    a chat-history drawer, open any past conversation, and start a new chat —
-    scoped to conversations the principal may see (their own, plus joint threads).
-
-P6a. Multi-user conversation legibility
-    Shared (joint) conversations are visually identified: in the chat-history
-    drawer they carry the participating members' profile pictures (the Google
-    picture mirrored by the auth provider — fetched live, never stored by
-    Penny), and within a shared conversation each user message written after
-    this feature shipped is attributed to its author, with another member's
-    messages rendered visually distinct from the viewer's own. Messages from
-    before attribution existed keep their prior rendering; missing pictures
-    degrade to initials and never block chat.
+    Persist conversations and messages so chat history survives across
+    sessions: browse history (newest-first) in a drawer, open any past
+    conversation, start a new chat.
 
 P6b. URL routing & deep links
-    The URL is the source of truth for what's on screen: key views (new chat,
-    a specific conversation, settings, invites) each have their own route, and
-    browser back/forward walk between them. A conversation lives at a
-    deep-linkable URL that a fresh load (re)hydrates; opening the home route
-    always starts a new chat, whose URL becomes the conversation's on the first
-    message. A conversation URL the principal cannot access (or that doesn't
-    exist) shows an explicit not-found state — never someone else's thread and
-    never a silent empty chat (enforced by frontend/e2e/routing.spec.ts and
-    conversation-isolation.spec.ts).
+    The URL is the source of truth for what's on screen: a conversation lives
+    at a deep-linkable /c/<id> URL that a fresh load (re)hydrates; the home
+    route always starts a new chat, whose URL becomes the conversation's on
+    the first message; unknown routes land home.
 
 P7. Agent workspace
-    Maintain a persistent per-user workspace (memory/, reports/) that carries
-    user state (e.g. budget notes) across chat and scheduled runs. State lives
-    in a hybrid store (Postgres capability broker + R2 blobs, manifest-
-    versioned) partitioned by visibility: a shared workspace per household and
-    a private one per user. Each run materializes the readable workspace into a
-    temp checkout and flushes changes back atomically; a joint session sees the
-    shared workspace only. A one-time `penny admin import-workspace` lifts an
-    existing local ~/.transactoid into the store.
+    Maintain a persistent local workspace (~/.penny: memory/, reports/,
+    logs/, config.toml, user_id) that carries user state (e.g. budget notes,
+    merchant rules) across chat, plugin, and scheduled runs. The workspace is
+    a plain directory the user owns; an existing ~/.transactoid is honored.
 
 P8. Output language
     Reports and chat responses are written in English (US) with $ currency,
     regardless of the language of transaction descriptors or memory notes.
 
-P9. BYO keys & metered subsidy
-    On a billing-enabled deployment, each user gets a small subsidized token
-    runway granted on their first Plaid link (per-user, so a two-spouse
-    household that both connect gets twice the grant; amount via
-    PENNY_SUBSIDY_CENTS, default $2). Each model call is metered: while runway
-    remains the turn runs on the platform key and accrues exact cost; once the
-    runway is spent the user must bring their own provider credentials — a
-    provider API key now, or a sanctioned OAuth subscription — which they can
-    connect at any time from an in-chat "Connect a provider" card or a
-    Providers & billing settings screen. A connected credential bills the user's
-    own provider (no subsidy accounting). With billing disabled (no platform
-    subsidy key configured) chat runs on the default key with no metering, so
-    dev/self-host is unaffected.
-
-P10. Open signup, households, and invites
-    Signup is fully open: any visitor can sign up (Clerk social login) and is
-    auto-provisioned an isolated one-person household with its own seeded
-    taxonomy on first authenticated request. A household member can invite NEW
-    (accountless) people by email; the invitee signs up straight into the
-    inviter's household. One individual = one household — there is no household
-    merge and no multi-household membership; an email that already belongs to an
-    active account cannot be invited (they are told to start fresh), and someone
-    who wants into another household starts over and re-links their bank. Members
-    see their household's name (renamable) and manage pending invites (list /
-    revoke). Cost/abuse of open signup is bounded by the P9 per-user subsidy cap.
-
 P11. Light-only appearance
-    The web app renders exclusively in the light "cream" design system (warm
-    paper ground, deep teal-green ink, gold accents, light-only logos) on every
-    screen — chat, auth/signup, providers & billing, invites, and the design-
-    system gallery. It never follows the OS `prefers-color-scheme: dark`
-    preference and exposes no light/dark toggle.
+    The web app renders exclusively in the light "cream" design system on
+    every screen. It never follows `prefers-color-scheme: dark` and exposes
+    no light/dark toggle.
 
-P12. Progressive agent-embedded onboarding
-    A new user lands straight in the chat — no wizard, stepper, or setup screen —
-    and the agent nudges toward setup steps (connect a bank, review account
-    visibility, tune the taxonomy, add merchant rules) at deterministic
-    milestones, naturally and at most once per turn, until each step is accepted
-    or dismissed (a dismissed step never nudges again but stays revisitable by
-    just asking). Nudges appear only in individual conversations, never joint
-    threads. To connect a bank the agent offers an inline Plaid Link card
-    rendered in the chat: Plaid runs in the browser and the public token is
-    exchanged server-side, storing the linked item (access token encrypted) and
-    its accounts as private, then kicking off the first sync; the user can
-    connect more accounts anytime by asking. A localhost Link flow stays for dev.
-    The onboarding state driving the nudges is invisible to the user — it never
-    appears in the transcript.
+P12. Progressive agent-embedded onboarding (in-chat)
+    A user lands straight in the chat — no wizard in the UI — and the agent
+    nudges toward setup steps (connect a bank, tune the taxonomy, add
+    merchant rules) at deterministic milestones, naturally and at most once
+    per turn, until each step is accepted or dismissed (a dismissed step
+    never nudges again but stays revisitable by asking). To connect a bank
+    the agent offers an inline Plaid Link card: Plaid runs in the browser and
+    the public token is exchanged server-side against the local API, storing
+    the linked item and accounts, then kicking off the first sync. Onboarding
+    state never appears in the transcript.
 
-P13. Public logged-out home page
-    A signed-out visitor to `/` sees a public marketing home page in the cream
-    design system — hero with sample prompts, a six-part feature tour with demo
-    conversations, and a closing call-to-action — rather than a bare sign-in
-    form. Every call-to-action routes to sign-up/sign-in (P10 open signup); the
-    sign-in and sign-up screens live at /sign-in and /sign-up and carry the
-    same design system (P11). Signed-out deep links to app screens still land
-    on sign-in. Copy is expected to iterate; the page structure and CTA routing
-    are the requirement (guardrail: frontend/e2e/home.spec.ts).
+P14. CLI onboarding
+    `penny init` is the setup front door: a re-runnable interactive wizard
+    covering workspace, database URL (auto-detected SQLite/Postgres), model
+    key, Plaid credentials, SMTP + recipients, schedule cadence, and daemon
+    installation. Answers persist in the workspace config.toml (secrets
+    chmod 600) and are loaded by every entrypoint as environment defaults;
+    a real environment variable always wins.
+
+P15. Local web app, no accounts
+    `penny serve` runs the complete product in one process on
+    127.0.0.1:8000 — API plus the built web UI. There are no accounts, no
+    sign-in, no landing page. Remote access (e.g. from a phone) is the
+    user's network choice: Tailscale is the documented path; a bare ngrok
+    URL is warned against. Penny ships no auth layer of its own.
+
+P16. Claude Code plugin (dual surface)
+    The same agent is exposed to MCP harnesses via `penny mcp` (stdio):
+    toolsets passed through verbatim, with fresh runtime context (date,
+    schema, taxonomy, memory) in the MCP initialize instructions, and
+    Penny's skills shipped as a Claude Code plugin (plugin/ +
+    .claude-plugin/marketplace.json). Plugin and web UI share one database
+    (WAL) and one workspace; the daemon keeps both fresh. The plugin never
+    spawns services — when the daemon is down, `sync_status` reports
+    staleness and the agent suggests `penny daemon start`.
+
+P17. Hosted-data export (transient)
+    A one-off tool (backend/transient/single-player-export) exports one
+    household from the hosted multi-tenant Postgres into a fresh local
+    single-player database, preserving category corrections and history that
+    are not re-derivable from Plaid. It reads the source strictly read-only.
 
 
 TECHNICAL INVARIANTS / CONSTRAINTS
 ----------------------------------
 
-T1. Domain segregation (HARD)
-    Agent, website/app, and deploy are segregated domains with one-directional
-    dependencies (website -> agent, deploy -> app). Application code never
-    imports from deploy or branches on deployment topology.
-    See AGENTS.local.md; enforced by backend/tests/test_deploy_segregation.py.
-
-T2. Finance-data isolation
-    App/website data never shares the finance database or the run_sql blast
-    radius; it lives in a separate schema/db owned by the website's own engine.
-    run_sql operates over finance data ONLY.
+T1. Host-composition seam (penny-web layering)
+    The hosted product composes this core through explicit seams only:
+    create_app(AppConfig(auth_dependency, turn_wiring, extra_routers,
+    static_dir)) for the web surface, build_agent/build_model for the loop,
+    and the PENNY_* env contract for configuration. Core code contains no
+    auth, no billing, no tenancy, and no branches on hosting topology.
+    Exercised by backend/tests/api/test_app_factory.py until penny-web is
+    the real second consumer.
 
 T2a. run_sql is read-only (HARD)
     The agent's run_sql tool accepts only a single read-only SELECT (covering
     VALUES / TABLE / set-ops / WITH … SELECT). It parses every query with
     libpg_query (pglast) and rejects, before execution, any write/DDL/session
-    statement, multi-statement input, and side-effecting function call
-    (notably set_config, the RLS GUC-override vector, class F02). The gate is at
-    the input layer so it holds independently of database grants (unavailable on
-    Neon). Enforced by backend/penny/security/sql_read_guard.py and
+    statement, multi-statement input, and side-effecting function call. The
+    gate is at the input layer so it holds independently of database grants.
+    PENNY_AGENT_READONLY_DATABASE_URL optionally adds a database-level
+    read-only role on user-owned Postgres as defense-in-depth. Enforced by
+    backend/penny/security/sql_read_guard.py and
     backend/tests/security/test_sql_read_guard.py.
 
-T2b. One schema authority per environment
-    The durable (Postgres) schema is evolved ONLY by alembic migrations,
-    applied once per deploy via `penny migrate` (release_command). `create_all`
-    is forbidden on Postgres (DB.create_schema / create_web_schema raise on a
-    non-SQLite engine) — on a durable DB it silently half-migrates and collides
-    with the chain. SQLite (dev/test/eval) still builds from the models via
-    `create_all`. Enforced by backend/tests/test_schema_authority.py and
-    backend/tests/test_schema_drift.py (models must equal the migration chain).
+T2b. One schema authority per dialect
+    SQLite builds the schema from the models via create_all (bootstrap).
+    Postgres is evolved ONLY by the alembic chain (`penny migrate`, run
+    automatically by init/serve); create_all is refused there. Migration 029
+    (single-player baseline) is the fork point: the hosted DB stays frozen at
+    028 + penny-web's overlay chain, and core migrations after the fork must
+    NEVER run against the hosted database. Enforced by
+    backend/tests/test_schema_authority.py and tests/test_schema_drift.py
+    (models must equal the migration chain).
 
-T3. Never point a dev server at production
-    Dev/test runs against a Neon branch (backend/.env.test). The production
-    databases (Supabase prod / Neon `production`) are off-limits to local or
-    dev servers.
+T3. Never point this core at the hosted multi-tenant database
+    The single-player core is shaped for a single user's database. The
+    hosted (multi-tenant, RLS-constrained) Postgres is off-limits: writes
+    would violate its constraints and 029+ would destroy its tenancy. Moving
+    data from hosted to local goes through the P17 export tool.
 
 T4. Don't reimplement the libraries
-    The agent loop, providers, sessions, sandboxes, skills, and tool decorator
-    come from agent-harness; the chat UI from agent-ui. Penny wraps or extends
-    them and never forks their responsibilities.
+    The agent loop, providers, sessions, sandboxes, skills, and tool
+    decorator come from agent-harness; the chat UI components from agent-ui.
+    Penny wraps or extends them and never forks their responsibilities.
 
 T5. Config is the only runtime seam
-    Cross-environment behaviour reads a PENNY_* variable through config.py.
-    Code never reads a fly.toml/schedules.json or names a deployable.
+    Cross-environment behaviour reads a PENNY_* variable (config.py /
+    os.environ). config.toml supplies defaults via `penny.settings`; the
+    environment always wins. Code never reads deploy artifacts.
 
-T6. Scheduler contract (Sprites-forward)
-    Scheduled work runs as manager-spawned, auto-destroyed job machines that
-    execute `penny <command>` from the app image, with per-job env injected
-    from the cron config.env. No native Machine schedule, no in-container
-    scheduler.
+T6. Local scheduler contract
+    Scheduled work runs through `penny daemon` invoking the CLI
+    (`penny sync`, `penny run-scheduled-report`) as contained subprocesses;
+    jobs are idempotent and skew-tolerant, and a job failure never kills the
+    scheduler loop.
 
 T7. Single source of truth
     Prompts live only in backend/.prompts/ (promptorium); taxonomy seed in
-    backend/configs/taxonomy.yaml; runtime/deploy config in the PENNY_*
-    contract. No value is duplicated across homes.
+    backend/configs/taxonomy.yaml; runtime config in the PENNY_* contract;
+    skills in backend/.agent/skills (the plugin symlinks them). No value is
+    duplicated across homes.
 
-T8. Multi-tenant data isolation
-    Every financial row belongs to exactly one household and one owning user,
-    with 'private'/'shared' visibility. Isolation is enforced in two layers:
-    Postgres row-level security (USING and WITH CHECK, so neither reads nor
-    writes cross households — including the agent's read-only run_sql) and
-    app-level query filtering (the only layer on SQLite dev). A joint session
-    sees shared rows only; no row may be owned by the joint-session sentinel.
-    The agent's free-form run_sql runs on a dedicated read-only Postgres role
-    that cannot mutate the tenant GUC to escape its household: EXECUTE on
-    set_config is revoked and the context is pinned through a set-once
-    SECURITY DEFINER helper, so an injected CTE cannot flip app.current_household
-    before RLS evaluates (F02/F05). That role also cannot read the RLS-exempt
-    identity tables (users/households) — SELECT on them is revoked so run_sql
-    cannot enumerate every email/Clerk-id and household UUID (F04) — and is
-    confined to the finance schema, never the website's web.* app schema.
-    Plaid access tokens are encrypted at rest (key-versioned, so rotation is
-    a config change); in clerk (prod) mode, storing a token with no key set
-    fails closed rather than persisting plaintext (F07). In production, identity
-    is a Clerk-verified JWT resolved to
-    the household/user principal per request (dev keeps an env-pinned principal);
-    an authenticated identity with a verified email but no row is auto-provisioned
-    a household (P10), while an unverified/absent email is rejected. The same
-    RLS/visibility rules govern the
-    workspace store tables (prefixes/manifests/heads): R2 keys derive only from
-    RLS-gated rows via opaque unguessable prefix tokens, and only the workspace
-    shim touches R2 — the agent never gets a direct R2 capability.
-    Enforced by backend/tests/adapters/db/test_rls_isolation.py,
-    test_multitenant_acceptance.py, and test_workspace_rls.py (require
-    POSTGRES_TEST_URL).
+T8. One database, one user
+    Finance and app-bookkeeping tables live in ONE database (the app tables
+    namespaced app_*), on SQLite opened in WAL mode so the server, daemon,
+    and MCP processes share the file safely. There is no tenant column, no
+    request principal, and no row-level scoping anywhere in core: the
+    database boundary IS the privacy boundary. The stable local user ref
+    (Plaid client_user_id) is a workspace-minted UUID (penny.identity).
+    Plaid access tokens are encrypted at rest when PENNY_PLAID_TOKEN_KEY is
+    configured (opt-in; the local DB is the user's own).
 
 T9. Verification gate
-    `ruff check`, `ruff format --check`, and `pytest` pass before any unit of
-    work is considered complete.
+    `ruff check`, `ruff format --check`, and `pytest` pass before any unit
+    of work is considered complete; the frontend builds (`npm run build`)
+    and typechecks.
 
 T10. Layered domain architecture (target)
-     Within a domain, code follows the layered stack
-     Types -> Config -> Repo -> Service -> Runtime -> UI with forward-only
-     dependencies; cross-cutting concerns (auth, connectors, telemetry, feature
-     flags) enter via Providers. The codebase is not yet fully aligned: new code
-     adheres, and code a change touches is migrated toward it under the campfire
-     rule with strict scope limits. See AGENTS.md ("Architecture: layered
-     domains").
-
-T11. Credential security & no-ambient-key gate
-     BYO provider credentials and the usage/subsidy ledgers are website-owned,
-     owner-scoped (private to the user even within a household — no shared arm),
-     and out of the finance run_sql blast radius (their own web schema/db with
-     owner-scoped RLS, USING and WITH CHECK). Secrets are encrypted at rest
-     (key-versioned envelope) and decrypted only at the outbound-LLM call site;
-     reads expose only a masked hint — never to the browser, a URL, or logs
-     (token-exchange errors are scrubbed). OAuth is Authorization-Code + PKCE
-     with an independent CSRF state and refresh-rotation persisted atomically
-     under a per-(user,provider) lock; no CLI-impersonation surface ships. On a
-     billing-enabled shared server there is no ambient/global env-key fallback
-     for a user run: the pre-dispatch gate resolves the per-user credential and
-     cannot be bypassed by a client-supplied model/credential parameter; with no
-     BYO credential and no remaining subsidy the turn is blocked, never silently
-     run on the platform key. Enforced by backend/tests/billing/ (test_vault.py,
-     test_gate.py, test_billing_rls.py — the last requires POSTGRES_TEST_URL).
-
-T12. Signup & invite integrity
-     Provisioning and joining are fail-closed: a solo signup yields a fully
-     isolated household (T8 RLS), and provision-or-join is idempotent so a signup
-     race or retry produces exactly one household/user (email is unique, lowercased
-     and matched lowercased). An invite is realized as a pending users row
-     (external_auth_id NULL) in the INVITER's household only — the target
-     household is always the caller's principal, never a request-body value — and
-     a first login atomically claims it. An invite can never target an email that
-     already has an active account (no takeover), and revoking an invite only ever
-     deletes an unclaimed pending row, never an active user. Auto-provision
-     requires a verified email. Subject re-binding is environment-gated: only
-     under PENNY_ENV=development (an explicit local opt-in; unset fails closed
-     to production, which deploy also pins) may a verified email re-stamp a
-     row's external_auth_id to a new Clerk subject.
-     Production keeps strict subject matching: a verified email bound to a
-     DIFFERENT subject is rejected (HTTP 403, recycled-email takeover shape),
-     never silently resolved. Enforced by backend/tests/test_signup.py,
-     tests/api/test_invites.py, tests/api/test_me.py, tests/api/test_auth_*.py,
-     and tests/adapters/db/test_signup_isolation.py (the last requires
-     POSTGRES_TEST_URL).
+     Code follows the layered stack Types -> Config -> Repo -> Service ->
+     Runtime -> UI with forward-only dependencies; cross-cutting concerns
+     enter via explicit providers/seams. New code adheres; code a change
+     touches migrates toward it under the campfire rule with strict scope
+     limits. See AGENTS.md ("Architecture: layered domains").
 
 T13. System-reminder subsystem & onboarding state
      Dynamic onboarding/nudge state never enters the (cache-stable) system
-     prompt: it is delivered as server-generated <system-reminder> text flushed
-     into the next user message by agent-harness's ReminderQueue and drained at
-     run start, and hidden from the UI as a first-class agent-ui guarantee
-     (stripSystemReminders) — so it reaches the model but never the rendered or
-     stored transcript. Reminder content is server-generated only (never
-     interpolated from client input), so the flush path cannot inject attacker
-     text into the turn; only the most recent reminder of a kind reflects current
-     state. Onboarding items and queued reminders are website/app state in the
-     separate web DB/schema (out of the agent run_sql blast radius), owner-scoped
-     within a household by RLS (USING + WITH CHECK). Item status is limited to
+     prompt: it is delivered as server-generated <system-reminder> text
+     flushed into the next user message by agent-harness's ReminderQueue and
+     drained at run start, hidden from the UI (stripSystemReminders).
+     Reminder content is server-generated only. Item status is limited to
      pending/accepted/dismissed; activation is computed deterministically per
      turn, never stored. Enforced by backend/tests/test_reminder_e2e.py,
-     tests/test_onboarding.py, tests/test_reminder_queue.py,
-     tests/test_domain_segregation.py, and
-     tests/adapters/db/test_phase5_rls.py (the last requires POSTGRES_TEST_URL).
+     tests/test_onboarding.py, tests/test_reminder_queue.py.
 
 T14. Categorizer-eval isolation & signal
-     The daily categorizer eval holds NO control-plane credential: it replays the
-     agent on an in-process, writable SQLite snapshot of prod finance data — no
-     live Neon branch, no Neon API key, no neonctl. Bulk finance reads run on the
-     SELECT-only role (PENNY_AGENT_READONLY_DATABASE_URL) under RLS (the snapshot
-     unions the household's principals); only the narrow eval-store writes use the
-     read-write role, and during the untrusted replay the process-global DB points
-     at the snapshot so the agent can never reach prod. The eval runs in its own
-     `penny-eval` Fly app with a reduced secret set (no PLAID_*/CLERK_*/MODAL_*),
-     spawned per the T6 scheduler contract. Every run emits exactly one status
-     email (heartbeat / report link / failure alert) and a failure records a
-     durable eval_runs row without advancing the watermark, so a stopped or broken
-     pipeline is never silent. Enforced by backend/tests/eval/test_job.py.
+     The categorizer eval replays the agent on an in-process, writable
+     SQLite snapshot — during the untrusted replay the process-global DB
+     points at the snapshot so the agent can never reach the primary. A
+     failure records a durable eval_runs row without advancing the
+     watermark, and every run emits exactly one status email, so a stopped
+     or broken pipeline is never silent. Enforced by
+     backend/tests/eval/test_job.py.
