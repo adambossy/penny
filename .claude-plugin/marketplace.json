@@ -1,0 +1,13 @@
+{
+  "name": "penny",
+  "owner": {
+    "name": "Adam Bossy"
+  },
+  "plugins": [
+    {
+      "name": "penny",
+      "source": "./plugin",
+      "description": "Local personal-finance agent: Plaid sync, LLM categorization, reports — over your own database."
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "penny",
+  "version": "0.1.0",
+  "description": "Penny — a local personal-finance agent: Plaid sync, LLM categorization, spending analysis and reports over your own database.",
+  "author": {
+    "name": "Adam Bossy"
+  }
+}
