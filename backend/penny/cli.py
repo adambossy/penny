@@ -407,6 +407,19 @@ def init() -> None:
     )
 
 
+@app.command("mcp")
+def mcp_cmd() -> None:
+    """Serve Penny's toolsets over stdio MCP (for Claude Code and friends).
+
+    The harness owns the conversation loop; this process only exposes the
+    tools plus fresh runtime context (date, schema, taxonomy, memory) via the
+    MCP initialize instructions. Blocks until the client disconnects.
+    """
+    from penny.mcp_server import run_stdio
+
+    run_stdio()
+
+
 _daemon_app = typer.Typer(help="The background scheduler (sync + reports).")
 app.add_typer(_daemon_app, name="daemon")
 

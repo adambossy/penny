@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "penny": {
+      "command": "penny",
+      "args": ["mcp"]
+    }
+  }
+}
