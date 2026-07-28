@@ -33,6 +33,10 @@ export default defineConfig({
         replacement: path.resolve(__dirname, "packages/ui/src/theme.css"),
       },
       { find: "@penny/ui", replacement: path.resolve(__dirname, "packages/ui/src/index.ts") },
+      {
+        find: "@penny/chat-ui",
+        replacement: path.resolve(__dirname, "packages/chat-ui/src/index.ts"),
+      },
       ...(usePublished
         ? []
         : [

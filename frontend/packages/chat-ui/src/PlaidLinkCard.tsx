@@ -3,7 +3,6 @@ import type { ReactNode } from "react";
 import { usePlaidLink } from "react-plaid-link";
 import { useLocation, useNavigate } from "react-router";
 import { Button, Card } from "@penny/ui";
-import { authedFetch } from "./authFetch";
 import { conversationPath, useConversationId } from "./routes";
 
 /**
@@ -97,15 +96,16 @@ export function PlaidLinkCard({ part }: { part: ToolPart }) {
 
   // `fetch` only rejects on a network error, so a 4xx/5xx would otherwise flip
   // the card to "Bank linked" falsely — gate success on `res.ok` and surface a
-  // failure state instead (mirrors ConnectProviderCard's try/catch + error card).
+  // failure state instead.
   async function exchange(publicToken: string): Promise<void> {
     setError(null);
     try {
       // If the /c/:id invariant above ever breaks, fail loudly (error card)
       // rather than exchanging the bank link into a phantom conversation.
       if (!conversationId) throw new Error("No conversation in the URL to link the bank to");
-      const res = await authedFetch("/api/plaid/exchange", {
+      const res = await fetch("/api/plaid/exchange", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           public_token: publicToken,
           conversation_id: conversationId,

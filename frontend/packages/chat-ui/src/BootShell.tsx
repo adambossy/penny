@@ -2,11 +2,10 @@ import { Menu } from "lucide-react";
 import { Header, IconButton } from "@penny/ui";
 
 /**
- * Chrome-only stand-in rendered while clerk-js confirms a hinted session
- * (see AuthGate's __client_uat check): the app header paints immediately so a
- * returning user sees "the app" instead of a blank frame, and the swap to the
- * real AppShell is seamless because the chrome geometry matches. The controls
- * are inert placeholders — the session isn't confirmed yet.
+ * Chrome-only stand-in rendered while the app boots: the header paints
+ * immediately so a returning user sees "the app" instead of a blank frame, and
+ * the swap to the real shell is seamless because the chrome geometry matches.
+ * The controls are inert placeholders.
  */
 export function BootShell() {
   return (

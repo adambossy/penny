@@ -5,12 +5,12 @@ import { expect, test } from "./fixtures/app";
  * inside its own container and the composer stays pinned at the bottom of
  * the viewport.
  *
- * The historical bug: ChatScreen's `sr-only` session-mode marker is
- * `position: absolute` (Tailwind's sr-only), and the transcript scroller was
- * not a positioned ancestor — so the marker's containing block was the
- * AppShell root, its static position sat at the end of the full transcript
- * height, and a long conversation stretched `document` scrolling far past
- * the composer.
+ * The historical bug: an absolutely-positioned `sr-only` marker (since
+ * removed) sat inside the transcript, and the transcript scroller was not a
+ * positioned ancestor — so the marker's containing block was the AppShell
+ * root, its static position sat at the end of the full transcript height,
+ * and a long conversation stretched `document` scrolling far past the
+ * composer. The scroller stays `relative` to contain any such descendant.
  *
  * Hydration is stubbed with a long transcript so the spec needs no model.
  */

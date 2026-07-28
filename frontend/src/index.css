@@ -14,8 +14,10 @@
    @font-face rules. Imported after tailwindcss so its @theme extends the single
    Tailwind context (generating bg-navy, text-ink, font-display, …). */
 @import "@penny/ui/styles.css";
-/* Scan @penny/ui source so Tailwind emits the utility classes its components use. */
+/* Scan the workspace packages' source so Tailwind emits the utility classes
+   their components use. */
 @source "../packages/ui/src";
+@source "../packages/chat-ui/src";
 
 /* Tailwind must scan agent-ui's class names to generate the utilities its
    components use (rounded-2xl, border, bg-card, shadow-sm, ...). Scan the
