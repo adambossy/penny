@@ -52,6 +52,11 @@ class _FakeDB:
     def __init__(self, dialect: str, calls: list[str]) -> None:
         self.dialect = dialect
         self._calls = calls
+        # The T3 foreign-DB guard inspects the engine for a households table;
+        # a real in-memory engine keeps the fake honest (and tenant-free).
+        from sqlalchemy import create_engine
+
+        self._engine = create_engine("sqlite://")
 
     def create_schema(self) -> None:
         self._calls.append("finance")

@@ -33,6 +33,20 @@ def bootstrap() -> None:
     db = get_db()
     if db.dialect == "sqlite":
         db.create_schema()
+    else:
+        # REQUIREMENTS T3: never run the single-player app against the hosted
+        # multi-tenant database — refuse before touching anything.
+        import sqlalchemy as sa
+
+        if "households" in sa.inspect(db._engine).get_table_names():
+            from .schema import ForeignDatabaseError
+
+            raise ForeignDatabaseError(
+                "Refusing to start: this looks like a HOSTED multi-tenant "
+                "Penny database (a 'households' table exists). Point "
+                "PENNY_DATABASE_URL at a database of your own, or export "
+                "your data with backend/transient/single-player-export."
+            )
     with db.session() as session:
         seed_taxonomy(session)
 
