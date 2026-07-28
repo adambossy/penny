@@ -35,9 +35,11 @@ from .tools.registry import build_toolset
 
 
 def _sql_dialect_from_env() -> str:
-    """Return ``postgresql`` or ``sqlite`` based on ``$DATABASE_URL``."""
-    url = os.environ.get("DATABASE_URL", "").strip().lower()
-    if url.startswith(("postgres://", "postgresql://", "postgresql+", "postgres+")):
+    """Return ``postgresql`` or ``sqlite`` from the configured database URL."""
+    from .db import resolve_database_url
+
+    url = resolve_database_url().lower()
+    if url.startswith(("postgresql://", "postgresql+", "postgres+")):
         return "postgresql"
     return "sqlite"
 

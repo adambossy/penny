@@ -1,10 +1,10 @@
 """Workspace directory resolution.
 
-The workspace directory holds user-specific runtime data such as the
-``memory/`` and ``reports/`` subdirectories. The default location is
-``~/.transactoid`` — preserved from the prior product name so existing user
-state (budget, merchant rules, prior reports) is picked up without
-migration. Override with the ``PENNY_WORKSPACE`` environment variable.
+The workspace directory holds user-specific runtime data: ``memory/``,
+``reports/``, ``logs/``, the minted ``user_id``, and ``config.toml`` (see
+``penny.settings``). The default location is ``~/.penny``; an existing
+``~/.transactoid`` (the prior product name) is honored so old user state
+carries over without migration. Override with ``$PENNY_WORKSPACE``.
 """
 
 from __future__ import annotations
@@ -14,17 +14,23 @@ from pathlib import Path
 
 PENNY_WORKSPACE = "PENNY_WORKSPACE"
 
-_DEFAULT_WORKSPACE = Path.home() / ".transactoid"
+_DEFAULT_WORKSPACE = Path.home() / ".penny"
+_LEGACY_WORKSPACE = Path.home() / ".transactoid"
 
 
 def resolve_workspace_dir() -> Path:
     """Return the workspace root directory.
 
-    Uses ``$PENNY_WORKSPACE`` when set, otherwise ``~/.transactoid``.
+    ``$PENNY_WORKSPACE`` wins when set. Otherwise ``~/.penny`` — unless it
+    does not exist and the legacy ``~/.transactoid`` does, in which case the
+    legacy directory is used as-is (existing state keeps working; ``penny
+    init`` offers the actual move).
     """
     env_value = os.environ.get(PENNY_WORKSPACE, "").strip()
     if env_value:
         return Path(env_value).expanduser()
+    if not _DEFAULT_WORKSPACE.exists() and _LEGACY_WORKSPACE.exists():
+        return _LEGACY_WORKSPACE
     return _DEFAULT_WORKSPACE
 
 

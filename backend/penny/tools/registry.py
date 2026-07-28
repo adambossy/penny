@@ -12,7 +12,6 @@ from .audit import (
     find_similar_tagged_transactions,
     transaction_tags,
 )
-from .connect_provider import connect_provider
 from .delivery import send_email_report, upload_artifact_to_r2
 from .memory import generate_memory_index
 from .onboarding import make_resolve_onboarding_item
@@ -28,7 +27,7 @@ from .sign_conventions import (
     re_derive_account,
     set_sign_convention,
 )
-from .sync import sync_transactions
+from .sync import sync_status, sync_transactions
 from .taxonomy import migrate_taxonomy
 from .transactions import (
     hide_transactions,
@@ -49,6 +48,7 @@ def build_toolset(*, onboarding_resolver: OnboardingResolver | None = None) -> T
             connect_bank_account,
             relink_account,
             sync_transactions,
+            sync_status,
             # Mutations
             recategorize_merchant,
             recategorize_transaction,
@@ -72,9 +72,7 @@ def build_toolset(*, onboarding_resolver: OnboardingResolver | None = None) -> T
             # Delivery
             upload_artifact_to_r2,
             send_email_report,
-            # Billing (connect-a-provider card)
-            connect_provider,
-            # Onboarding (resolver injected by the website; None on front doors
+            # Onboarding (resolver injected by the web app; None on front doors
             # that don't wire onboarding, e.g. the CLI/cron)
             make_resolve_onboarding_item(onboarding_resolver),
             # Memory
