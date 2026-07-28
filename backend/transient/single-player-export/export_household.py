@@ -122,13 +122,34 @@ def export(source_url: str, household_id: str, dest_path: Path) -> None:
     )
 
 
+def _resolve_household(source_url: str, email: str) -> str:
+    """Look up the household id for a member email (read-only)."""
+    engine = sa.create_engine(source_url)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                sa.text("SELECT household_id FROM users WHERE email = :email"),
+                {"email": email.strip().lower()},
+            ).first()
+    finally:
+        engine.dispose()
+    if row is None:
+        sys.exit(f"no user with email {email!r} in the source database")
+    return str(row[0])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, help="Source Postgres URL (read-only)")
-    parser.add_argument("--household-id", required=True, help="Household UUID to export")
+    parser.add_argument("--household-id", help="Household UUID to export")
+    parser.add_argument("--email", help="Resolve the household from a member email")
     parser.add_argument("--dest", required=True, help="Destination SQLite file path")
     args = parser.parse_args()
-    export(args.source, args.household_id, Path(args.dest).expanduser())
+    if bool(args.household_id) == bool(args.email):
+        sys.exit("exactly one of --household-id / --email is required")
+    household_id = args.household_id or _resolve_household(args.source, args.email)
+    print(f"Exporting household {household_id}")
+    export(args.source, household_id, Path(args.dest).expanduser())
 
 
 if __name__ == "__main__":
