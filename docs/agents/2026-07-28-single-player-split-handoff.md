@@ -44,6 +44,12 @@ compose the core via its new seams.
   (irreversible; drops tenancy, creates `app_*`). **Never run 029+ against
   the hosted/Neon multi-tenant DB** — hosted stays frozen at 028 +
   penny-web's future overlay chain. `test_schema_drift` is enforcing again.
+  This is now GUARDED, not just documented: `migrate`/`serve`/`bootstrap`
+  raise `ForeignDatabaseError` on any database with a `households` table
+  (commit fea480b, added after a near-miss where a dev .env carrying prod's
+  DATABASE_URL let serve attempt 029 against production — alembic's
+  transaction rolled it back). Audit your own .env before pointing anything
+  anywhere.
 - **Workspace** — default is `~/.penny` now (an existing `~/.transactoid`
   is honored). `~/.penny/config.toml` (from `penny init`) feeds env
   DEFAULTS via `penny.settings`; real env vars still win.
@@ -69,7 +75,7 @@ compose the core via its new seams.
   localhost TLS private key in pre-rebuild lineage; risk-acceptance is the
   owner's call. Until the flip, nothing about your remotes changes.
 - `@penny/chat-ui` npm publish deferred (no npm auth in the build env).
-- Gates on the branch: backend `ruff` clean, `pytest` 522 passed; frontend
+- Gates on the branch: backend `ruff` clean, `pytest` 524 passed; frontend
   `npm run build` + `tsc --noEmit` clean.
 
 ## Rules of thumb until the PR merges
