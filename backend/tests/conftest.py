@@ -13,7 +13,6 @@ import pytest
 os.environ.setdefault("PENNY_SENTRY_ENABLED", "false")
 
 import penny.api.main
-from penny.api.persistence.engine import reset_web_engine
 import penny.db
 import penny.observability.otel as _otel
 import penny.services
@@ -45,14 +44,12 @@ def _reset_singletons() -> None:
     penny.services._migrator = None
     penny.taxonomy.loader._category_id_cache.clear()
     penny.api.main._conversation_store = None
-    reset_web_engine()
 
 
 @pytest.fixture
 def isolated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Point the process-wide finance + app-store DBs at fresh tmp SQLite files."""
+    """Point the process-wide single-player DB at a fresh tmp SQLite file."""
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'test.db'}")
-    monkeypatch.setenv("PENNY_WEB_DATABASE_URL", f"sqlite:///{tmp_path / 'web.db'}")
     _reset_singletons()
     yield
     _reset_singletons()

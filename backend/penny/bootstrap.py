@@ -26,14 +26,13 @@ def bootstrap() -> None:
     automatically at onboarding / server startup), so bootstrap creates
     nothing there — it only seeds.
     """
+    # Importing the app-store models registers them on the shared Base so
+    # create_all builds the whole single-player schema (finance + app_*).
+    from .api.persistence import models as _app_models  # noqa: F401
+
     db = get_db()
     if db.dialect == "sqlite":
         db.create_schema()
-        # App-owned conversation store: a SEPARATE engine + schema/DB from
-        # the finance tables above (see api/persistence/engine.py).
-        from .api.persistence.engine import create_web_schema
-
-        create_web_schema()
     with db.session() as session:
         seed_taxonomy(session)
 

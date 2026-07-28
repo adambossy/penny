@@ -78,12 +78,8 @@ def test_bootstrap_creates_all_on_sqlite(monkeypatch):
 
     monkeypatch.setattr("penny.bootstrap.get_db", lambda: _FakeDB("sqlite", calls))
     monkeypatch.setattr("penny.bootstrap.seed_taxonomy", lambda session: None)
-    monkeypatch.setattr(
-        "penny.api.persistence.engine.create_web_schema",
-        lambda: calls.append("web"),
-    )
 
     from penny.bootstrap import bootstrap
 
     bootstrap()
-    assert calls == ["finance", "web"]
+    assert calls == ["finance"]  # one schema now covers finance + app_ tables

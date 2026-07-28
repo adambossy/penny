@@ -115,10 +115,9 @@ async def test_stored_conversation_never_contains_reminder_text(isolated_db):
     path /api/chat uses — with a reminder queued for the same conversation, and
     assert the stored text carries no reminder span.
     """
-    from penny.api.persistence.engine import create_web_schema
     from penny.api.persistence.store import ConversationStore
 
-    create_web_schema()
+    _setup()
     conv = "conv-store"
     client_text = "how much did I spend on dining?"
 

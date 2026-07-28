@@ -35,8 +35,8 @@ from agent_harness.core.tools import ToolCall
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from penny.adapters.db.models import Base
 from penny.api.bridge import stream_and_persist
-from penny.api.persistence.models import WebBase
 from penny.api.persistence.rehydrate import parts_to_messages
 from penny.api.persistence.store import ConversationStore
 
@@ -105,9 +105,8 @@ class _ScriptedModel:
 
 
 def _make_store(tmp_path: Path) -> ConversationStore:
-    engine = create_engine(f"sqlite:///{tmp_path / 'web.db'}")
-    engine = engine.execution_options(schema_translate_map={"web": None})
-    WebBase.metadata.create_all(engine)
+    engine = create_engine(f"sqlite:///{tmp_path / 'app.db'}")
+    Base.metadata.create_all(engine)
     return ConversationStore(session_factory=sessionmaker(bind=engine, class_=Session))
 
 

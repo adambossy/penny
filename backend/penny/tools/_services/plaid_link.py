@@ -132,6 +132,14 @@ async def exchange_public_token(
         )
     session.flush()
 
+    # Commit before the sync kick and the reminder enqueue: both open their own
+    # connections onto the same single-player database, and SQLite (WAL or not)
+    # allows one writer — holding this session's write transaction open across
+    # the enqueue would deadlock into "database is locked". Committing releases
+    # the lock (and lets the sync thread see the item); the caller's session
+    # context manager commit then finds nothing left to do.
+    session.commit()
+
     # First sync: fire-and-forget so the exchange returns immediately.
     (sync or _default_sync())(item_id)
 

@@ -6,12 +6,13 @@ from fastapi.testclient import TestClient
 
 import penny.api.main as main
 from penny.api.persistence.store import ConversationStore
+from penny.db import get_db
 
 
 def test_conversation_list_shape(isolated_db):
-    # input: two conversations in the app store
+    # input: two conversations in the app store (shared single-player schema)
+    get_db().create_schema()
     store = ConversationStore()
-    store.create_schema()
     store.ensure_conversation("c-1")
     store.ensure_conversation("c-2")
 
