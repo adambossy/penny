@@ -13,6 +13,7 @@ import pytest
 os.environ.setdefault("PENNY_SENTRY_ENABLED", "false")
 
 import penny.api.main
+import penny.api.routes
 import penny.db
 import penny.observability.otel as _otel
 import penny.services
@@ -43,7 +44,7 @@ def _reset_singletons() -> None:
     penny.services._persister = None
     penny.services._migrator = None
     penny.taxonomy.loader._category_id_cache.clear()
-    penny.api.main._conversation_store = None
+    penny.api.routes._conversation_store = None
 
 
 @pytest.fixture

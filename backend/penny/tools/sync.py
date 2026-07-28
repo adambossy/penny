@@ -51,3 +51,40 @@ async def sync_transactions(count: int = 250) -> dict[str, Any]:
             "total_modified": 0,
             "total_removed": 0,
         }
+
+
+@tool
+async def sync_status() -> dict[str, Any]:
+    """Report how fresh the local data is and whether the daemon is running.
+
+    Reads the daemon's state file (last sync/report runs + outcomes) and the
+    newest transaction timestamp. Use before analysis when data freshness
+    matters; if the daemon is not running, suggest the user start it with
+    ``penny daemon start``.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    def _run() -> dict[str, Any]:
+        from sqlalchemy import func, select
+
+        from penny.adapters.db.models import PlaidTransaction
+        from penny.daemon import read_state
+
+        state = read_state()
+        with get_db().session() as s:
+            newest = s.execute(
+                select(func.max(PlaidTransaction.created_at))
+            ).scalar_one_or_none()
+        sync_state = state.get("sync") or {}
+        return {
+            "status": "success",
+            "last_sync_at": sync_state.get("last_run_at"),
+            "last_sync_ok": sync_state.get("ok"),
+            "last_report": state.get("report"),
+            "newest_transaction_at": newest.isoformat() if newest else None,
+            "now": datetime.now(UTC).isoformat(),
+            "daemon_state_present": bool(state),
+        }
+
+    return await asyncio.to_thread(_run)
