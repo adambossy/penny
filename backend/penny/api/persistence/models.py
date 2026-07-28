@@ -1,9 +1,9 @@
-"""Conversation-persistence ORM models on the app store's own ``Base``.
+"""Conversation-persistence ORM models — app bookkeeping tables.
 
-These tables are deliberately **not** registered on the finance
-``penny.adapters.db.models.Base``. Keeping them on a separate declarative base
-(and a separate engine — see ``engine.py``) keeps app bookkeeping distinct
-from the finance schema.
+Single-player keeps ONE database: these tables live beside the finance tables
+in the same SQLite file (or Postgres DB), registered on the shared finance
+``Base`` and namespaced by an ``app_`` table-name prefix (SQLite has no
+schemas). ``create_all`` / the single alembic chain cover them with the rest.
 
 A message stores its ordered AI SDK ``parts`` as a single JSON array column —
 the natural read/write unit is the whole UIMessage, and we never query across
@@ -29,29 +29,18 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.orm import (
-    DeclarativeBase,
     Mapped,
     mapped_column,
     relationship,
 )
 
-# Logical schema name for the app tables. On Postgres the engine maps this to
-# a real ``web`` schema; on SQLite the engine maps it to ``None`` (SQLite has
-# no schemas). See ``engine.py``.
-WEB_SCHEMA = "web"
+from penny.adapters.db.models import Base
 
 
-class WebBase(DeclarativeBase):
-    """Declarative base for app-owned (non-finance) tables."""
-
-    pass
-
-
-class Conversation(WebBase):
+class Conversation(Base):
     """A single chat conversation. PK is the client-generated UUID."""
 
-    __tablename__ = "conversations"
-    __table_args__ = {"schema": WEB_SCHEMA}
+    __tablename__ = "app_conversations"
 
     conversation_id: Mapped[str] = mapped_column(String, primary_key=True)
     title: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -69,10 +58,10 @@ class Conversation(WebBase):
     )
 
 
-class ConversationMessage(WebBase):
+class ConversationMessage(Base):
     """One message (user or assistant) with its ordered AI SDK ``parts``."""
 
-    __tablename__ = "conversation_messages"
+    __tablename__ = "app_conversation_messages"
     __table_args__ = (
         CheckConstraint(
             "status IN ('streaming', 'complete', 'error')",
@@ -91,7 +80,6 @@ class ConversationMessage(WebBase):
             postgresql_where=text("ai_sdk_message_id IS NOT NULL"),
             sqlite_where=text("ai_sdk_message_id IS NOT NULL"),
         ),
-        {"schema": WEB_SCHEMA},
     )
 
     message_id: Mapped[int] = mapped_column(
@@ -99,7 +87,7 @@ class ConversationMessage(WebBase):
     )
     conversation_id: Mapped[str] = mapped_column(
         String,
-        ForeignKey(f"{WEB_SCHEMA}.conversations.conversation_id", ondelete="CASCADE"),
+        ForeignKey("app_conversations.conversation_id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -124,7 +112,7 @@ class ConversationMessage(WebBase):
     )
 
 
-class QueuedReminder(WebBase):
+class QueuedReminder(Base):
     """A backend-enqueued ``<system-reminder>`` awaiting the next agent turn.
 
     App state: the harness drains these into the outgoing user message via the
@@ -134,13 +122,12 @@ class QueuedReminder(WebBase):
     when building ``Reminder``.
     """
 
-    __tablename__ = "queued_reminders"
+    __tablename__ = "app_queued_reminders"
     __table_args__ = (
         UniqueConstraint(
             "conversation_id", "kind", name="uq_queued_reminders_conv_kind"
         ),
         Index("ix_queued_reminders_conversation_id", "conversation_id"),
-        {"schema": WEB_SCHEMA},
     )
 
     # Autoincrement integer PK so ``ORDER BY id`` is exact insertion order —
@@ -155,7 +142,7 @@ class QueuedReminder(WebBase):
     )
 
 
-class OnboardingItem(WebBase):
+class OnboardingItem(Base):
     """One progressive-onboarding step's state.
 
     ``status`` is the only stored state (``pending`` → ``accepted``/
@@ -165,14 +152,13 @@ class OnboardingItem(WebBase):
     once-per-session stamp).
     """
 
-    __tablename__ = "onboarding_items"
+    __tablename__ = "app_onboarding_items"
     __table_args__ = (
         UniqueConstraint("item_key", name="uq_onboarding_items_item"),
         CheckConstraint(
             "status IN ('pending', 'accepted', 'dismissed')",
             name="ck_onboarding_items_status",
         ),
-        {"schema": WEB_SCHEMA},
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)

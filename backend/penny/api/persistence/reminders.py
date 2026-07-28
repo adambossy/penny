@@ -22,21 +22,16 @@ import uuid
 from agent_harness.extras.reminders import Reminder
 from sqlalchemy.orm import Session
 
-from .engine import get_web_session_factory
 from .models import QueuedReminder
 
 
 @contextmanager
 def _web_session() -> Iterator[Session]:
-    session = get_web_session_factory()()
-    try:
+    """A session on the shared single-player engine (app tables live there)."""
+    from penny.db import get_db
+
+    with get_db().session() as session:
         yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
 class DbReminderQueue:

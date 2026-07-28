@@ -123,7 +123,9 @@ def build_fixture_bytes(src_db: DB) -> bytes:
     """Bundle ``src_db``'s reachable tables + merchant-rules.md as gzipped tar bytes."""
     with tempfile.TemporaryDirectory() as tmp:
         sqlite_path = Path(tmp) / _SQLITE_MEMBER
-        snapshot_to_sqlite(src_db, sqlite_path)
+        # Dispose so WAL checkpoints into the main file; the raw bytes below
+        # must be the complete database.
+        snapshot_to_sqlite(src_db, sqlite_path).dispose()
         sqlite_bytes = sqlite_path.read_bytes()
     rules_bytes = _read_merchant_rules().encode("utf-8")
     buf = io.BytesIO()

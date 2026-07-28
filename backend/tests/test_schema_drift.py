@@ -10,7 +10,6 @@ See docs/superpowers/plans/2026-07-09-alembic-sole-authority-on-postgres.md.
 
 from __future__ import annotations
 
-import pytest
 from sqlalchemy import Engine, create_engine, inspect
 
 from penny.adapters.db.models import Base
@@ -25,15 +24,6 @@ def _schema(engine: Engine) -> dict[str, list[str]]:
     }
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Single-player rip-out removed tenancy from the models, but the "
-        "migration chain (through 028) still builds it. The chain is retired/"
-        "reconciled in the one-database consolidation phase; until then the "
-        "drift guard is a known-failing record of that divergence."
-    ),
-    strict=True,
-)
 def test_finance_models_match_migrations(tmp_path):
     # The explicit URL wins over any ambient DATABASE_URL (env.py precedence).
     mig_url = f"sqlite:///{tmp_path / 'mig.db'}"

@@ -8,15 +8,14 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from penny.api.persistence.models import WebBase
+from penny.adapters.db.models import Base
 from penny.api.persistence.store import ConversationStore
 
 
 def _make_store(tmp_path: Path) -> ConversationStore:
-    """Build a ConversationStore over a fresh tmp SQLite web DB."""
-    engine = create_engine(f"sqlite:///{tmp_path / 'web.db'}")
-    engine = engine.execution_options(schema_translate_map={"web": None})
-    WebBase.metadata.create_all(engine)
+    """Build a ConversationStore over a fresh tmp SQLite DB."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'app.db'}")
+    Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, class_=Session)
     return ConversationStore(session_factory=factory)
 

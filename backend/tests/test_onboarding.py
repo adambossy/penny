@@ -1,14 +1,12 @@
 """Deterministic onboarding trigger engine (``penny.api.persistence.onboarding``).
 
-Onboarding items are website/app state in the ``web`` schema (decision D1), so
-``ensure_items`` / ``evaluate`` take a web session rather than a finance session.
-``_setup`` creates both schemas so downstream Plaid tests (which reuse it) can
-write finance rows.
+Onboarding items are app state on the shared single-player database, so
+``_setup``'s single ``create_schema`` builds them beside the finance tables
+(the model imports above register the app_ tables on the shared Base).
 """
 
 from __future__ import annotations
 
-from penny.api.persistence.engine import create_web_schema
 from penny.api.persistence.models import OnboardingItem
 from penny.api.persistence.onboarding import TurnSignals, ensure_items, evaluate
 from penny.api.persistence.reminders import _web_session
@@ -16,9 +14,8 @@ from penny.db import get_db
 
 
 def _setup() -> None:
-    """Create the finance + web schemas on the isolated tmp DBs."""
+    """Create the single-player schema (finance + app_*) on the isolated tmp DB."""
     get_db().create_schema()
-    create_web_schema()
 
 
 def _signals(**kw) -> TurnSignals:

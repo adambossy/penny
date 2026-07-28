@@ -1,4 +1,4 @@
-"""The conversation tables build on their own Base and are kept off finance."""
+"""The app tables live on the shared finance Base, namespaced by app_."""
 
 from __future__ import annotations
 
@@ -7,43 +7,34 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, inspect
 
-from penny.adapters.db.models import Base as FinanceBase
-from penny.api.persistence.models import WebBase
+from penny.adapters.db.models import Base
+from penny.api.persistence import models as _app_models  # noqa: F401
+
+_APP_TABLES = {
+    "app_conversations",
+    "app_conversation_messages",
+    "app_queued_reminders",
+    "app_onboarding_items",
+}
 
 
-def test_finance_metadata_excludes_conversation_tables():
-    # input: the finance declarative base's table registry
-    finance_tables = set(FinanceBase.metadata.tables)
-
-    # act/expected: conversation tables are NOT registered on the finance Base
-    # (so the agent's run_sql engine never sees them).
-    assert not any(
-        name.endswith("conversations") or name.endswith("conversation_messages")
-        for name in finance_tables
-    )
+def test_app_tables_register_on_shared_base():
+    # Single-player: one Base, one database. The app tables are distinguished
+    # from the finance tables only by their app_ prefix.
+    assert _APP_TABLES <= set(Base.metadata.tables)
 
 
-def test_web_metadata_includes_conversation_tables():
-    # input: the website base's table registry
-    web_tables = set(WebBase.metadata.tables)
+def test_create_all_builds_app_tables_on_sqlite(tmp_path: Path):
+    # input: a fresh SQLite engine
+    engine = create_engine(f"sqlite:///{tmp_path / 'app.db'}")
 
-    # expected: both conversation tables live on the website Base. (The billing
-    # vault/ledger tables — phase 2b — also register on WebBase, so this is a
-    # subset check, not exact equality.)
-    assert {"web.conversations", "web.conversation_messages"} <= web_tables
+    # act: build the whole single-player schema from the models
+    Base.metadata.create_all(engine)
 
-
-def test_create_web_schema_builds_tables_on_sqlite(tmp_path: Path):
-    # input: a fresh SQLite engine with the web schema translated to None
-    engine = create_engine(f"sqlite:///{tmp_path / 'web.db'}")
-    engine = engine.execution_options(schema_translate_map={"web": None})
-
-    # act: create the tables
-    WebBase.metadata.create_all(engine)
-
-    # expected: both tables exist
+    # expected: the app tables exist beside the finance tables
     table_names = set(inspect(engine).get_table_names())
-    assert {"conversations", "conversation_messages"} <= table_names
+    assert _APP_TABLES <= table_names
+    assert "derived_transactions" in table_names
 
 
 if __name__ == "__main__":  # pragma: no cover

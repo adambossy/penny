@@ -1,8 +1,7 @@
 """``ConversationStore`` — CRUD over the app-owned conversation tables.
 
-Self-contained SQLAlchemy over the app store's *own* engine/session
-(``engine.py``). It imports neither the finance ``DB`` facade nor any agent
-module — that isolation is what the segregation guardrail test enforces.
+Runs over the shared single-player engine (one database holds finance and
+app tables; the app tables carry an ``app_`` prefix).
 
 Conventions mirror the finance facade: a ``session()`` context manager that
 commits on success and rolls back on error, and ``expunge`` before returning
@@ -19,8 +18,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .engine import get_web_session_factory
-from .models import Conversation, ConversationMessage, WebBase
+from .models import Conversation, ConversationMessage
 
 # Title is derived from the first user message, truncated to this many chars.
 _TITLE_MAX_LEN = 80
@@ -34,8 +32,10 @@ class ConversationStore:
     """Persistence façade for conversations and their messages."""
 
     def __init__(self, session_factory: Any = None) -> None:
-        # Default to the process-wide app-store engine; tests may inject one.
-        self._session_factory = session_factory or get_web_session_factory()
+        # Default to the process-wide engine; tests may inject a factory.
+        from penny.db import get_db
+
+        self._session_factory = session_factory or get_db().session_factory
 
     @contextmanager
     def session(self) -> Iterator[Session]:
@@ -48,26 +48,6 @@ class ConversationStore:
             raise
         finally:
             session.close()
-
-    def create_schema(self) -> None:
-        """Build the app store's tables from the models. SQLite ONLY.
-
-        Mirrors ``engine.create_web_schema`` but honors an injected session
-        factory's bind so tests can point it at a throwaway engine. On Postgres
-        the tables are alembic-owned; ``create_all`` is refused there.
-        """
-        bind = self._session_factory.kw.get("bind")
-        if bind is None:  # pragma: no cover - default factory always has a bind
-            from .engine import create_web_schema
-
-            create_web_schema()
-            return
-        if bind.dialect.name != "sqlite":
-            raise RuntimeError(
-                "create_schema()/create_all is SQLite-only; on Postgres the "
-                "app tables are alembic-owned. Run `penny migrate`."
-            )
-        WebBase.metadata.create_all(bind)
 
     # ----- conversations ---------------------------------------------------
 

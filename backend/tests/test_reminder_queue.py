@@ -1,17 +1,18 @@
 """DB-backed reminder queue (``penny.api.persistence.reminders.DbReminderQueue``).
 
-The queue is website/app state in the ``web`` schema (decision D1), so tests
-create the web schema before driving the queue.
+The queue is app state on the shared single-player database, so tests create
+the one schema (importing ``DbReminderQueue`` registers the app_ tables on the
+shared Base) before driving the queue.
 """
 
 from __future__ import annotations
 
-from penny.api.persistence.engine import create_web_schema
 from penny.api.persistence.reminders import DbReminderQueue
+from penny.db import get_db
 
 
 def _queue() -> DbReminderQueue:
-    create_web_schema()
+    get_db().create_schema()
     return DbReminderQueue()
 
 

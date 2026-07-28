@@ -180,6 +180,19 @@ def _enable_sqlite_foreign_keys(dbapi_connection: Any, _record: Any) -> None:
     cursor.close()
 
 
+def _enable_sqlite_wal(dbapi_connection: Any, _record: Any) -> None:
+    """WAL journal mode: the server, daemon, and MCP processes share one file.
+
+    WAL lets readers proceed during a writer's transaction (and vice versa),
+    which is what makes the multi-process single-player topology workable.
+    A no-op on in-memory databases.
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
+
+
 def _stored_token(access_token: str) -> str:
     """Plaid access tokens are encrypted at rest when the key is configured.
 
@@ -224,9 +237,16 @@ class DB:
                 }
             )
         self._engine = create_engine(url, **engine_kwargs)
-        if url.startswith("sqlite") and enforce_sqlite_fks:
-            event.listen(self._engine, "connect", _enable_sqlite_foreign_keys)
+        if url.startswith("sqlite"):
+            event.listen(self._engine, "connect", _enable_sqlite_wal)
+            if enforce_sqlite_fks:
+                event.listen(self._engine, "connect", _enable_sqlite_foreign_keys)
         self._session_factory = sessionmaker(bind=self._engine, class_=Session)
+
+    @property
+    def session_factory(self) -> sessionmaker:
+        """The engine's session factory — the seam app stores bind through."""
+        return self._session_factory
 
     @property
     def dialect(self) -> str:
@@ -247,6 +267,15 @@ class DB:
                 "is alembic-owned. Run `penny migrate` (alembic upgrade head)."
             )
         Base.metadata.create_all(self._engine)
+
+    def dispose(self) -> None:
+        """Close every pooled connection.
+
+        On a WAL-mode SQLite file, closing the last connection checkpoints the
+        ``-wal`` sidecar back into the main file — required before treating the
+        file's raw bytes as the complete database (e.g. the eval fixture).
+        """
+        self._engine.dispose()
 
     @contextmanager
     def session(self) -> Iterator[Session]:
