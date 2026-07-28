@@ -1,30 +1,19 @@
 import { useCallback, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ChatHistoryDrawer } from "./ChatHistoryDrawer";
-import { HouseholdHeader } from "./HouseholdHeader";
-
-/** Injected token source: Clerk's getToken in clerk mode, a null no-op in dev. */
-type GetToken = () => Promise<string | null>;
+import { Menu } from "lucide-react";
+import { Link } from "react-router";
+import { Header, IconButton } from "@penny/ui";
+import { ChatHistoryDrawer } from "@penny/chat-ui";
 
 /**
- * The app chrome shared by both auth modes: the left chat-history drawer, the
- * header (logo/household name, nav, hamburger), and the routed screen below it.
- * Owns the drawer's open state so the hamburger and the drawer share it.
+ * The app chrome: the left chat-history drawer, the header (logo, nav,
+ * hamburger), and the routed screen below it. Owns the drawer's open state so
+ * the hamburger and the drawer share it.
  *
- * ``actions`` is the header's right slot — Clerk's <UserButton> in clerk mode,
- * omitted in dev — so this shell renders identically without a ClerkProvider.
  * On mobile the drawer overlays (with a tap-to-close backdrop) instead of
  * pushing the content, which would otherwise squish the chat off a phone.
  */
-export function AppShell({
-  getToken,
-  actions,
-  children,
-}: {
-  getToken: GetToken;
-  actions?: ReactNode;
-  children: ReactNode;
-}) {
+export function AppShell({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const hamburgerRef = useRef<HTMLButtonElement>(null);
   const closeDrawer = useCallback(() => {
@@ -55,15 +44,25 @@ export function AppShell({
         open={drawerOpen}
         onClose={closeDrawer}
         onNavigate={onDrawerNavigate}
-        getToken={getToken}
       />
       <div className="flex min-w-0 flex-1 flex-col">
-        <HouseholdHeader
-          getToken={getToken}
-          actions={actions}
-          drawerOpen={drawerOpen}
-          onToggleDrawer={() => setDrawerOpen((o) => !o)}
-          hamburgerRef={hamburgerRef}
+        <Header
+          leading={
+            <IconButton
+              ref={hamburgerRef}
+              aria-label={drawerOpen ? "Close chat history" : "Open chat history"}
+              aria-expanded={drawerOpen}
+              onClick={() => setDrawerOpen((o) => !o)}
+            >
+              <Menu className="h-5 w-5" />
+            </IconButton>
+          }
+          nav={
+            // A router Link, not <a href> — a hard navigation reboots the SPA.
+            <Link to="/" className="hover:underline">
+              Chat
+            </Link>
+          }
         />
         <div className="min-h-0 flex-1">{children}</div>
       </div>

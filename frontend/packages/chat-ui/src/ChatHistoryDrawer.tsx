@@ -1,17 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { SquarePen } from "lucide-react";
 import { Link } from "react-router";
-import { AvatarStack } from "@penny/ui";
-import { authHeaders } from "./authFetch";
-import type { TokenGetter } from "./authFetch";
 import { conversationPath, useConversationId } from "./routes";
-import { useHouseholdMembers } from "./useHouseholdMembers";
 
 interface Conversation {
   id: string;
   title: string | null;
   updated_at: string;
-  session_mode: "individual" | "joint";
 }
 
 type LoadState =
@@ -39,26 +34,12 @@ export function ChatHistoryDrawer({
   open,
   onClose,
   onNavigate,
-  getToken,
 }: {
   open: boolean;
   onClose: () => void;
   onNavigate: () => void;
-  getToken: TokenGetter;
 }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
-  const { members, me } = useHouseholdMembers(getToken);
-
-  // The joint-thread mark: the other member in front, the viewer behind —
-  // "they are in here too". AvatarStack paints later entries on top, so the
-  // other member goes last. Empty until the household actually has two
-  // members (or while the members fetch is loading/failed), so individual
-  // entries and solo households render exactly as before.
-  const jointStack = useMemo(() => {
-    const other = members.find((m) => !m.is_you);
-    if (!other || !me) return [];
-    return [me, other].map((m) => ({ name: m.display_name, imageUrl: m.image_url }));
-  }, [members, me]);
 
   // The open conversation comes from the URL — the drawer renders outside the
   // matched route, so it reads the path (routes.ts) rather than useParams.
@@ -73,8 +54,7 @@ export function ChatHistoryDrawer({
     if (!open) return;
     let cancelled = false;
     setState((s) => (s.status === "ready" ? s : { status: "loading" }));
-    authHeaders(getToken)
-      .then((headers) => fetch("/api/conversations", { headers }))
+    fetch("/api/conversations")
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -90,7 +70,7 @@ export function ChatHistoryDrawer({
     return () => {
       cancelled = true;
     };
-  }, [open, getToken, activeId]);
+  }, [open, activeId]);
 
   // ESC closes the drawer (and restores focus to the toggle via onClose).
   useEffect(() => {
@@ -151,9 +131,6 @@ export function ChatHistoryDrawer({
                 <span className="min-w-0 flex-1 truncate">
                   {conv.title ?? "New conversation"}
                 </span>
-                {conv.session_mode === "joint" && jointStack.length > 0 && (
-                  <AvatarStack people={jointStack} />
-                )}
               </Link>
             ))}
         </nav>

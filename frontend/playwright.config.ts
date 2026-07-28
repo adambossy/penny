@@ -38,9 +38,7 @@ export default defineConfig({
       env: {
         DATABASE_URL: `sqlite:///${E2E_DB_DIR}/penny-e2e.db`,
         PENNY_WEB_DATABASE_URL: `sqlite:///${E2E_DB_DIR}/penny-e2e-web.db`,
-        // The backend defaults to fail-closed clerk mode (phase 2); the default
-        // harness runs dev-principal. Overridable so the gated Clerk auth specs
-        // (PENNY_E2E_CLERK=1) can force clerk mode with real Clerk env.
+        // The harness runs in dev-principal mode (single-player, no auth).
         PENNY_AUTH_MODE: process.env.PENNY_AUTH_MODE ?? "dev",
         PENNY_DEV_USER_ID: DEV_USER_ID,
         PENNY_DEV_HOUSEHOLD_ID: DEV_HOUSEHOLD_ID,
@@ -68,10 +66,6 @@ export default defineConfig({
         AGENT_UI_USE_PUBLISHED: process.env.CI
           ? "1"
           : (process.env.AGENT_UI_USE_PUBLISHED ?? "0"),
-        // Clerk publishable key for the auth e2e specs. Empty in the default
-        // dev-principal harness (the app then sends no bearer token); set it
-        // (with PENNY_E2E_CLERK=1 + a clerk-mode backend) to run auth.spec.ts.
-        VITE_CLERK_PUBLISHABLE_KEY: process.env.VITE_CLERK_PUBLISHABLE_KEY ?? "",
       },
     },
   ],
