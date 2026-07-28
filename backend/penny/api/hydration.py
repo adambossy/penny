@@ -34,10 +34,5 @@ def conversation_to_ui(
             continue
         message_id = row.ai_sdk_message_id or f"hist_{row.seq}"
         message: dict[str, Any] = {"id": message_id, "role": row.role, "parts": parts}
-        if row.role == "user":
-            # Who wrote this turn; null on rows from before attribution existed
-            # (the client renders those exactly as it did then).
-            sender = row.sender_user_id
-            message["senderUserId"] = str(sender) if sender is not None else None
         ui_messages.append(message)
     return ui_messages

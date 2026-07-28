@@ -1,9 +1,5 @@
-# Virtual uv workspace root — not a package itself. The members resolve and
-# lock together into the single ./uv.lock, so backend, sandbox, and lib can
-# never disagree about a shared dependency's version (the wire codec in
-# lib/protocol demands both sides serialize with the same agent-harness and
-# pydantic). Each member still installs only its own dependency closure; the
-# sandbox image's "no finance stack" property is checked against
-# `uv export --package penny-sandbox`, not the shape of this lockfile.
+# Virtual uv workspace root — not a package itself. A single member today
+# (backend); the root keeps ./uv.lock and .venv at the repo root so tooling
+# paths stay stable.
 [tool.uv.workspace]
-members = ["backend", "sandbox", "lib"]
+members = ["backend"]

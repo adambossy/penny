@@ -1,26 +1,22 @@
 """DB-backed reminder queue (``penny.api.persistence.reminders.DbReminderQueue``).
 
 The queue is website/app state in the ``web`` schema (decision D1), so tests
-create the web schema and drive the queue with fresh per-conversation contexts.
+create the web schema before driving the queue.
 """
 
 from __future__ import annotations
 
-import uuid
-
 from penny.api.persistence.engine import create_web_schema
 from penny.api.persistence.reminders import DbReminderQueue
-from penny.tenancy.context import RequestContext
 
 
-def _ctx() -> RequestContext:
+def _queue() -> DbReminderQueue:
     create_web_schema()
-    return RequestContext(user_id=uuid.uuid4(), household_id=uuid.uuid4())
+    return DbReminderQueue()
 
 
 async def test_override_upserts_and_drain_deletes(isolated_db):
-    ctx = _ctx()
-    q = DbReminderQueue(ctx)
+    q = _queue()
     await q.enqueue("conv-1", "onboarding", "v1")
     await q.enqueue("conv-1", "onboarding", "v2")  # override -> single row
     await q.enqueue("conv-1", "plaid_link", "linked")
@@ -33,8 +29,7 @@ async def test_override_upserts_and_drain_deletes(isolated_db):
 
 
 async def test_no_override_appends(isolated_db):
-    ctx = _ctx()
-    q = DbReminderQueue(ctx)
+    q = _queue()
     await q.enqueue("conv-1", "note", "a", override=False)
     await q.enqueue("conv-1", "note", "b", override=False)
     assert [r.content for r in await q.drain("conv-1")] == ["a", "b"]
@@ -43,8 +38,7 @@ async def test_no_override_appends(isolated_db):
 
 
 async def test_queues_are_per_conversation(isolated_db):
-    ctx = _ctx()
-    q = DbReminderQueue(ctx)
+    q = _queue()
     await q.enqueue("conv-a", "onboarding", "a-state")
     assert await q.drain("conv-b") == []
     assert [r.content for r in await q.drain("conv-a")] == ["a-state"]

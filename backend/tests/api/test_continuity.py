@@ -12,7 +12,6 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-import uuid
 
 from agent_harness import Agent, StaticToolset, tool
 from agent_harness.core.events import (
@@ -40,11 +39,6 @@ from penny.api.bridge import stream_and_persist
 from penny.api.persistence.models import WebBase
 from penny.api.persistence.rehydrate import parts_to_messages
 from penny.api.persistence.store import ConversationStore
-from penny.tenancy.context import RequestContext
-
-# Single principal for these store-mechanics tests; access checks pass
-# because every call in a test shares this context.
-_CTX = RequestContext(user_id=uuid.uuid4(), household_id=uuid.uuid4())
 
 _TS = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -139,9 +133,9 @@ async def test_turn2_model_sees_turn1_tool_call_with_persist_session_off(
     # input: turn 1 makes a tool call then answers; persisted to the app store.
     conversation_id = "conv-cont"
     store = _make_store(tmp_path)
-    store.ensure_conversation(conversation_id, _CTX)
+    store.ensure_conversation(conversation_id)
     store.append_user_message(
-        conversation_id, _CTX, ai_sdk_message_id="u1", text="echo hello"
+        conversation_id, ai_sdk_message_id="u1", text="echo hello"
     )
 
     turn1_model = _ScriptedModel(
@@ -163,18 +157,18 @@ async def test_turn2_model_sees_turn1_tool_call_with_persist_session_off(
     )
     await _drain(
         stream_and_persist(
-            agent1, "echo hello", store=store, conversation_id=conversation_id, ctx=_CTX
+            agent1, "echo hello", store=store, conversation_id=conversation_id
         )
     )
 
     # setup: seed turn 2 from the app store (prior turns only), then append the
     # new user turn — exactly what main.chat does.
-    rows_before = store.get_conversation_messages(conversation_id, _CTX)
+    rows_before = store.get_conversation_messages(conversation_id)
     seed_messages = parts_to_messages(rows_before)
     turn2_session = InMemorySession(session_id=conversation_id)
     await turn2_session.add_messages(seed_messages)
     store.append_user_message(
-        conversation_id, _CTX, ai_sdk_message_id="u2", text="what did you echo?"
+        conversation_id, ai_sdk_message_id="u2", text="what did you echo?"
     )
 
     turn2_model = _ScriptedModel([{"text": "I previously echoed hello."}])
@@ -187,7 +181,6 @@ async def test_turn2_model_sees_turn1_tool_call_with_persist_session_off(
             "what did you echo?",
             store=store,
             conversation_id=conversation_id,
-            ctx=_CTX,
         )
     )
 

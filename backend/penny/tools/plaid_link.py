@@ -14,7 +14,7 @@ from typing import Any
 from agent_harness import tool
 
 from penny.db import get_db
-from penny.tenancy.context import require_request_context
+from penny.identity import local_user_id
 from penny.tools._services.plaid_link import create_link_token
 
 
@@ -27,8 +27,7 @@ async def connect_bank_account() -> dict[str, Any]:
     Plaid Link flow and the server exchanges the token. Tell the user a connect
     card is shown right in the chat.
     """
-    ctx = require_request_context()
-    return await asyncio.to_thread(create_link_token, user_id=ctx.user_id)
+    return await asyncio.to_thread(create_link_token, user_id=local_user_id())
 
 
 @tool
@@ -46,7 +45,6 @@ async def relink_account(item_id: str) -> dict[str, Any]:
     institution_name}``, or ``{status: 'error', message}`` when the item is
     unknown to this user.
     """
-    ctx = require_request_context()
 
     def _mint() -> dict[str, Any]:
         item = get_db().get_plaid_item(item_id)
@@ -55,7 +53,9 @@ async def relink_account(item_id: str) -> dict[str, Any]:
                 "status": "error",
                 "message": f"No linked connection found for item_id {item_id!r}.",
             }
-        payload = create_link_token(user_id=ctx.user_id, access_token=item.access_token)
+        payload = create_link_token(
+            user_id=local_user_id(), access_token=item.access_token
+        )
         payload["item_id"] = item.item_id
         payload["institution_name"] = getattr(item, "institution_name", None)
         return payload

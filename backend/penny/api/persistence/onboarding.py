@@ -23,17 +23,13 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from penny.tenancy.context import RequestContext
-
 from .models import OnboardingItem
-from .tenant import owner_web_session
 
 # The v1 onboarding steps, in the fixed order they appear in a consolidated
 # reminder. Kept concrete here (not injected) — the reusable trigger core is the
 # evaluate()/rule shape, per the plan's modularization note.
 ITEM_KEYS: tuple[str, ...] = (
     "connect_plaid",
-    "account_visibility",
     "custom_taxonomy",
     "merchant_rules",
 )
@@ -46,10 +42,6 @@ _GUIDANCE: dict[str, str] = {
     "connect_plaid": (
         "The user has no bank connected yet — offer to connect one. The "
         "connect_bank_account tool renders an inline Plaid card."
-    ),
-    "account_visibility": (
-        "This household has more than one member — offer to review which "
-        "accounts are shared with the household vs. kept private."
     ),
     "custom_taxonomy": (
         "The user has been categorizing for a few turns — offer to tailor the "
@@ -77,26 +69,18 @@ class TurnSignals:
     """
 
     has_linked_items: bool
-    household_member_count: int
     response_had_categorized_rows: bool
     user_corrected_category: bool
     conversation_id: str = ""
 
 
-def ensure_items(session: Session, ctx: RequestContext) -> None:
-    """Idempotently seed a pending row per item key for ``ctx.user_id``."""
-    existing = {
-        row.item_key
-        for row in session.query(OnboardingItem.item_key)
-        .filter(OnboardingItem.owner_user_id == ctx.user_id)
-        .all()
-    }
+def ensure_items(session: Session) -> None:
+    """Idempotently seed a pending row per item key."""
+    existing = {row.item_key for row in session.query(OnboardingItem.item_key).all()}
     for key in ITEM_KEYS:
         if key not in existing:
             session.add(
                 OnboardingItem(
-                    household_id=ctx.household_id,
-                    owner_user_id=ctx.user_id,
                     item_key=key,
                     status="pending",
                     trigger_state={},
@@ -105,7 +89,7 @@ def ensure_items(session: Session, ctx: RequestContext) -> None:
     session.flush()
 
 
-def evaluate(session: Session, ctx: RequestContext, signals: TurnSignals) -> str | None:
+def evaluate(session: Session, signals: TurnSignals) -> str | None:
     """Advance counters and return the consolidated reminder, or ``None``.
 
     Deterministic: updates each pending item's ``trigger_state`` counters from
@@ -114,12 +98,7 @@ def evaluate(session: Session, ctx: RequestContext, signals: TurnSignals) -> str
     when none fire). Once-per-session items stamp the conversation they nudged in.
     """
     pending = (
-        session.query(OnboardingItem)
-        .filter(
-            OnboardingItem.owner_user_id == ctx.user_id,
-            OnboardingItem.status == "pending",
-        )
-        .all()
+        session.query(OnboardingItem).filter(OnboardingItem.status == "pending").all()
     )
     by_key = {item.item_key: item for item in pending}
 
@@ -142,34 +121,28 @@ def evaluate(session: Session, ctx: RequestContext, signals: TurnSignals) -> str
     return _render(fired)
 
 
-def resolve(ctx: RequestContext, item_key: str, action: str) -> dict[str, str]:
-    """Set an item's status to ``accepted``/``dismissed`` for ``ctx.user_id``.
+def resolve(item_key: str, action: str) -> dict[str, str]:
+    """Set an item's status to ``accepted``/``dismissed``.
 
     Returns ``{item_key, status}`` on success, or ``{error}`` for an unknown key
-    or action (a model mistake surfaces as recoverable tool output, decision D6).
+    or action (a model mistake surfaces as recoverable tool output).
     Everything stays revisitable: a dismissed item is never nudged again, but the
     user can still ask and the agent performs the underlying action directly.
     """
+    from .reminders import _web_session
+
     if item_key not in ITEM_KEYS:
         return {"error": f"unknown item_key {item_key!r}"}
     if action not in _VALID_ACTIONS:
         return {"error": f"action must be one of {_VALID_ACTIONS}, got {action!r}"}
-    with owner_web_session(ctx) as s:
+    with _web_session() as s:
         item = (
             s.query(OnboardingItem)
-            .filter(
-                OnboardingItem.owner_user_id == ctx.user_id,
-                OnboardingItem.item_key == item_key,
-            )
+            .filter(OnboardingItem.item_key == item_key)
             .one_or_none()
         )
         if item is None:
-            item = OnboardingItem(
-                household_id=ctx.household_id,
-                owner_user_id=ctx.user_id,
-                item_key=item_key,
-                trigger_state={},
-            )
+            item = OnboardingItem(item_key=item_key, trigger_state={})
             s.add(item)
         item.status = action
         item.updated_at = datetime.now()
@@ -191,8 +164,6 @@ def _fires(key: str, state: dict[str, object], signals: TurnSignals) -> bool:
     # already nudged in.
     if state.get("last_nudged_conversation") == signals.conversation_id:
         return False
-    if key == "account_visibility":
-        return signals.has_linked_items and signals.household_member_count >= 2
     categorized = int(state.get("categorized_turns", 0))
     if key == "custom_taxonomy":
         return categorized >= 3

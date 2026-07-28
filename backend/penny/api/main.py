@@ -1,25 +1,20 @@
-"""FastAPI app exposing POST /api/chat as a Vercel AI SDK UI message stream."""
+"""FastAPI app exposing POST /api/chat as a Vercel AI SDK UI message stream.
+
+Single-player: there is no auth, no billing, no tenancy — every request is the
+one local user. The app binds to localhost by default (``penny serve``);
+remote access is the user's business via Tailscale (blessed) or ngrok
+(warned), never an auth layer here.
+"""
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 import contextlib
-from dataclasses import replace
-import json
-import os
-from pathlib import Path
-import shutil
-import tempfile
 from typing import Any
-import uuid
 
-from agent_harness.core.credentials import ApiKeyCredential, Credential
-from agent_harness.core.models import UsagePricer
 from agent_harness.sessions.inmemory import InMemorySession
-from agent_harness.usage.counting import price_table_pricer
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from loguru import logger
@@ -36,28 +31,11 @@ from penny.api.persistence.onboarding import (  # noqa: E402
     resolve,
 )
 from penny.api.persistence.reminders import DbReminderQueue  # noqa: E402
-from penny.auth.settings import load_auth_settings  # noqa: E402
-from penny.billing import gate as billing_gate  # noqa: E402
-from penny.billing.prices import load_price_table  # noqa: E402
-from penny.billing.session import BillingSession  # noqa: E402
-from penny.billing.usage_subscriber import start_usage_subscriber_task  # noqa: E402
 from penny.bootstrap import bootstrap  # noqa: E402
-from penny.config import penny_env  # noqa: E402
 from penny.db import get_db  # noqa: E402
 from penny.observability import init_sentry  # noqa: E402
-from penny.tenancy.context import (  # noqa: E402
-    RequestContext,
-    SessionMode,
-    set_request_context,
-)
-from penny.workspace_store.blobs import R2BlobStore  # noqa: E402
-from penny.workspace_store.broker import ensure_prefixes  # noqa: E402
-from penny.workspace_store.sync import flush, materialize  # noqa: E402
 
-from .auth import request_context  # noqa: E402
-from .billing_routes import router as billing_router  # noqa: E402
 from .bridge import _sse, stream_and_persist  # noqa: E402
-from .household_routes import router as household_router  # noqa: E402
 from .hydration import conversation_to_ui  # noqa: E402
 from .persistence.rehydrate import parts_to_messages  # noqa: E402
 from .persistence.store import ConversationAccessError, ConversationStore  # noqa: E402
@@ -67,76 +45,23 @@ from .persistence.store import ConversationAccessError, ConversationStore  # noq
 init_sentry()
 
 
-def _sandbox_flag() -> bool:
-    return os.environ.get("PENNY_SANDBOX_TURNS", "").lower() in ("1", "true", "yes")
-
-
-# The MCP tool server (built when the sandbox flag is on): same process as the
-# token minting (sandbox_wiring.mcp_registry), so the capability registry is
-# shared. The session manager's run() must be entered in the app lifespan
-# because a mounted sub-app's own lifespan does not fire.
-_mcp_app = None
-_mcp_session_manager = None
-if _sandbox_flag():
-    from penny.api.mcp_server import create_mcp
-    from penny.api.sandbox_wiring import mcp_registry
-    from penny.plugins.amazon import build_amazon_toolset
-    from penny.tools.registry import build_toolset
-
-    _mcp_app, _mcp_session_manager = create_mcp(
-        [build_toolset(), build_amazon_toolset()], mcp_registry
-    )
-
-
-@__import__("contextlib").asynccontextmanager
+@contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI):  # noqa: ANN201
     bootstrap()  # idempotent schema + taxonomy seed
-    if _mcp_session_manager is not None:
-        async with _mcp_session_manager.run():
-            yield
-    else:
-        yield
+    yield
 
 
 app = FastAPI(title="Penny backend", lifespan=_lifespan)
-if _mcp_app is not None:
-    # The MCP client (and a proxy that strips the trailing slash) POSTs to
-    # ``/mcp``; a mount only matches ``/mcp/…`` and would 307-redirect, which the
-    # client can't follow. Rewrite ``/mcp`` → ``/mcp/`` at the ASGI layer before
-    # routing — a pure path rewrite, so streaming is untouched.
-    class _McpSlash:
-        def __init__(self, inner: Any) -> None:
-            self._inner = inner
 
-        async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-            if scope.get("type") == "http" and scope.get("path") == "/mcp":
-                scope = {**scope, "path": "/mcp/"}
-            await self._inner(scope, receive, send)
-
-    app.add_middleware(_McpSlash)
-    app.mount("/mcp", _mcp_app)
-
-
-# Fail closed at import: clerk mode requires issuer/JWKS/frontend-origin (the
-# origin also feeds CORS). Never `*` with credentials. penny_env() is validated
-# here too so a typo'd PENNY_ENV fails the boot, not a login weeks later.
-_auth_settings = load_auth_settings()
-logger.info("PENNY_ENV tier: {}", penny_env())
-_origins = ["http://localhost:5173"]
-if _auth_settings.frontend_origin:
-    _origins.append(_auth_settings.frontend_origin)
+# The Vite dev server (npm run dev) is the one cross-origin caller; the served
+# frontend (penny serve) is same-origin.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_origins,
+    allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
-
-# BYO-credential / billing / provider-OAuth routes (website domain).
-app.include_router(billing_router)
-# Account bootstrap / household / invite routes (website domain).
-app.include_router(household_router)
 
 _conversation_store: ConversationStore | None = None
 
@@ -146,26 +71,6 @@ def _get_conversation_store() -> ConversationStore:
     if _conversation_store is None:
         _conversation_store = ConversationStore()
     return _conversation_store
-
-
-async def _seed_session(
-    store: ConversationStore, conversation_id: str, ctx: RequestContext
-) -> InMemorySession:
-    """Build an in-memory session seeded with prior-turn context.
-
-    Reverse-maps the conversation's stored ``parts`` into harness ``Message``s
-    (``parts_to_messages``) and loads them into a fresh ``InMemorySession``.
-    Called BEFORE the current user turn is appended, so the seed holds only
-    prior turns; the loop appends the new prompt itself. With
-    ``persist_session=False`` the agent reads this seed but writes nothing back
-    — the app store is the single source of continuity.
-    """
-    rows = store.get_conversation_messages(conversation_id, ctx)
-    prior_messages = parts_to_messages(rows)
-    session = InMemorySession(session_id=conversation_id)
-    if prior_messages:
-        await session.add_messages(prior_messages)
-    return session
 
 
 def _text_from_message(message: dict[str, Any]) -> str:
@@ -215,186 +120,48 @@ def _extract_prompt(body: dict[str, Any]) -> str:
     return ""
 
 
-def _turn_context(ctx: RequestContext, *, conversation_mode: str) -> RequestContext:
-    """Adopt the conversation's stored session mode for this turn.
-
-    Identity (user/household) still comes only from the verified principal; the
-    mode comes from the immutable conversation row. A ``joint`` turn runs RLS
-    with the nil-user sentinel (shared-only) via ``effective_user_id``.
-    """
-    return replace(ctx, session_mode=SessionMode(conversation_mode))
-
-
 _SSE_HEADERS = {
     "x-vercel-ai-ui-message-stream": "v1",
     "Cache-Control": "no-cache, no-transform",
     "Connection": "keep-alive",
 }
 
-# What the user sees when the subsidy runway is exhausted and no BYO credential
-# is connected. The Connect-a-provider card (Task 10) renders alongside this.
-_BLOCKED_MESSAGE = (
-    "You've used up your free Penny credits. To keep going, connect your own "
-    "AI provider API key (or subscription) in Settings → Providers & billing. "
-    "Your key is stored encrypted and never shown again."
-)
 
-
-def _resolve_gate(ctx: RequestContext) -> billing_gate.GateDecision:
-    """Resolve the pre-dispatch billing gate for this turn (owner-scoped read)."""
-    with BillingSession().begin(ctx) as s:
-        return billing_gate.resolve_for_run(s, ctx)
-
-
-def _credential_wiring(
-    decision: billing_gate.GateDecision, ctx: RequestContext
-) -> tuple[Credential | None, UsagePricer | None, Callable[[Any], Any] | None]:
-    """Translate a non-``Blocked`` gate decision into the per-run wiring.
-
-    Returns ``(credential, usage_pricer, subscribe_hook)``: ``UseDefault`` → the
-    default env key with no metering ``(None, None, None)``; ``UseByo`` → the
-    user's key, no metering; ``UseSubsidy`` → the platform key plus the pricer +
-    usage subscriber so completions accrue to the ledger.
-    """
-    if isinstance(decision, billing_gate.UseByo):
-        return decision.credential, None, None
-    if isinstance(decision, billing_gate.UseSubsidy):
-        credential = ApiKeyCredential(provider="google", key=decision.platform_key)
-        pricer = price_table_pricer(load_price_table())
-
-        def subscribe_hook(bus: Any) -> Any:
-            return start_usage_subscriber_task(bus, ctx)
-
-        return credential, pricer, subscribe_hook
-    return None, None, None
-
-
-@contextlib.asynccontextmanager
-async def _turn_workspace(ctx: RequestContext) -> AsyncIterator[Any]:
-    """Bracket the phase-1b workspace lifecycle around a streamed turn.
-
-    Materializes the turn's readable prefixes into a per-run temp checkout,
-    yields it (the agent roots its sandbox there so memory/reports edits are
-    local-FS fast), and on a CLEAN exit flushes changed blobs + advances each
-    prefix head; the temp dir is always removed. A streaming SSE generator can't
-    use ``run_with_workspace``'s ``await run_fn(root)`` shape, so the primitives
-    are composed as this async context manager instead. An aborted or errored
-    turn resumes at the ``yield`` with the exception and never reaches flush —
-    only a clean turn flushes. Scoped by ``ctx``, so a joint thread materializes
-    shared-only prefixes, consistent with the rest of the turn.
-    """
-    blob_store = R2BlobStore()
-    root = Path(tempfile.mkdtemp(prefix="penny-ws-"))
-    db = get_db()
-    try:
-        with db.session_for(ctx) as s:
-            ensure_prefixes(s, ctx)
-            checkout = materialize(s, ctx, blob_store=blob_store, root=root)
-        yield checkout
-        with db.session_for(ctx) as s:
-            flush(s, ctx, checkout, blob_store=blob_store)
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
-def _build_turn_signals(ctx: RequestContext, conversation_id: str) -> TurnSignals:
-    """Gather the deterministic onboarding signals for this turn.
-
-    ``has_linked_items`` / ``household_member_count`` come from the finance DB
-    (tenant-scoped by ``ctx``); the categorized/correction signals are v1
-    placeholders (False) until the bridge stashes prior-turn bookkeeping — a
-    natural follow-on that only *adds* nudges.
-    """
-    from penny.adapters.db.models import PlaidItem, User
+def _build_turn_signals(conversation_id: str) -> TurnSignals:
+    """Gather the deterministic onboarding signals for this turn."""
+    from penny.adapters.db.models import PlaidItem
 
     db = get_db()
-    with db.session_for(ctx) as s:
-        has_linked = (
-            s.query(PlaidItem)
-            .filter(PlaidItem.household_id == ctx.household_id)
-            .count()
-            > 0
-        )
-        members = s.query(User).filter(User.household_id == ctx.household_id).count()
+    with db.session() as s:
+        has_linked = s.query(PlaidItem).count() > 0
     return TurnSignals(
         has_linked_items=has_linked,
-        household_member_count=members,
         response_had_categorized_rows=False,
         user_corrected_category=False,
         conversation_id=conversation_id,
     )
 
 
-def _evaluate_onboarding(ctx: RequestContext, signals: TurnSignals) -> str | None:
-    """Seed items + evaluate the triggers on the web store; return content."""
-    from penny.api.persistence.tenant import owner_web_session
+async def _maybe_enqueue_onboarding(conversation_id: str) -> None:
+    """Enqueue the consolidated onboarding reminder for this turn.
 
-    with owner_web_session(ctx) as s:
-        ensure_items(s, ctx)
-        return evaluate(s, ctx, signals)
-
-
-async def _maybe_enqueue_onboarding(
-    ctx: RequestContext, *, conversation_id: str
-) -> None:
-    """Enqueue the consolidated onboarding reminder for an individual turn.
-
-    Joint conversations skip entirely (personal setup doesn't belong in a shared
-    thread). Called before ``agent.run`` so the harness flush picks the reminder
-    up this same turn.
+    Called before ``agent.run`` so the harness flush picks the reminder up this
+    same turn.
     """
-    if ctx.session_mode is SessionMode.JOINT:
-        return
-    signals = await asyncio.to_thread(_build_turn_signals, ctx, conversation_id)
-    content = await asyncio.to_thread(_evaluate_onboarding, ctx, signals)
+    import asyncio
+
+    signals = await asyncio.to_thread(_build_turn_signals, conversation_id)
+
+    def _evaluate() -> str | None:
+        from penny.api.persistence.reminders import _web_session
+
+        with _web_session() as s:
+            ensure_items(s)
+            return evaluate(s, signals)
+
+    content = await asyncio.to_thread(_evaluate)
     if content:
-        await DbReminderQueue(ctx).enqueue(conversation_id, "onboarding", content)
-
-
-async def _blocked_stream(
-    store: ConversationStore,
-    conversation_id: str,
-    ctx: RequestContext,
-    reason: str,
-) -> AsyncIterator[str]:
-    """Stream a friendly 'runway exhausted' assistant turn without any model.
-
-    Emits the AI SDK frame sequence for a single static text message and
-    persists it as a normal assistant turn, so the block is durable and shows on
-    reload. The context is cleared when the stream ends.
-    """
-    # Enqueue the (idempotent) connect nudge — minimal standalone stand-in for
-    # the phase-5 reminder subsystem (see phase-2b-decisions D8).
-    from penny.billing import reminders
-
-    reminders.enqueue_byo_credential(ctx.user_id)
-
-    run_id = f"blocked_{uuid.uuid4().hex}"
-    text_id = f"t_{run_id}"
-
-    def _f(frame: dict[str, Any]) -> str:
-        return f"data: {json.dumps(frame)}\n\n"
-
-    try:
-        yield _f({"type": "start", "messageId": run_id})
-        yield _f({"type": "start-step"})
-        yield _f({"type": "text-start", "id": text_id})
-        yield _f({"type": "text-delta", "id": text_id, "delta": _BLOCKED_MESSAGE})
-        yield _f({"type": "text-end", "id": text_id})
-        yield _f({"type": "finish-step"})
-        yield _f({"type": "finish"})
-        # Best-effort persist; a store failure must never kill the response.
-        with contextlib.suppress(Exception):
-            store.upsert_assistant_message(
-                conversation_id,
-                ctx,
-                ai_sdk_message_id=run_id,
-                parts=[{"type": "text", "text": _BLOCKED_MESSAGE}],
-                status="complete",
-            )
-        yield "data: [DONE]\n\n"
-    finally:
-        set_request_context(None)
+        await DbReminderQueue().enqueue(conversation_id, "onboarding", content)
 
 
 @app.get("/api/health")
@@ -403,25 +170,16 @@ async def health() -> dict[str, bool]:
 
 
 @app.get("/api/conversations")
-async def list_conversations(
-    ctx: RequestContext = Depends(request_context),
-) -> dict[str, Any]:
-    """List the principal's conversations (newest-first) for the history drawer.
-
-    Tenant-scoped by the resolved ``RequestContext`` (same visibility rule as
-    hydration): the store returns only conversations the principal may see.
-    """
+async def list_conversations() -> dict[str, Any]:
+    """List conversations (newest-first) for the history drawer."""
     store = _get_conversation_store()
-    rows = store.list_conversations(ctx)
+    rows = store.list_conversations()
     return {
         "conversations": [
             {
                 "id": row.conversation_id,
                 "title": row.title,
                 "updated_at": row.updated_at.isoformat(),
-                # individual / joint — the client marks joint threads as
-                # shared spaces (participant avatars) in the drawer.
-                "session_mode": row.session_mode,
             }
             for row in rows
         ]
@@ -429,37 +187,29 @@ async def list_conversations(
 
 
 @app.get("/api/sessions/{session_id}")
-async def get_session(
-    session_id: str,
-    ctx: RequestContext = Depends(request_context),
-) -> dict[str, Any]:
-    """Hydrate a conversation from the website store (the faithful path).
+async def get_session(session_id: str) -> dict[str, Any]:
+    """Hydrate a conversation from the app store (the faithful path).
 
     Reads the captured ``conversation_messages`` rows — not the lossy harness
     transcript — so the rehydrated transcript matches what was streamed. (The
-    ``/api/sessions`` path is kept for frontend compatibility; it now reads the
+    ``/api/sessions`` path is kept for frontend compatibility; it reads the
     conversation store.)
     """
     store = _get_conversation_store()
-    # Ownership is checked before any content is returned (closes the IDOR):
-    # a conversation the principal cannot see (or that does not exist) is a 404.
     try:
-        rows = store.get_conversation_messages(session_id, ctx)
+        rows = store.get_conversation_messages(session_id)
     except ConversationAccessError:
         raise HTTPException(status_code=404, detail="not found") from None
     return {"sessionId": session_id, "messages": conversation_to_ui(rows)}
 
 
 @app.post("/api/plaid/exchange")
-async def plaid_exchange(
-    request: Request,
-    ctx: RequestContext = Depends(request_context),
-) -> dict[str, Any]:
-    """Exchange a Plaid ``public_token`` server-side for the authed user.
+async def plaid_exchange(request: Request) -> dict[str, Any]:
+    """Exchange a Plaid ``public_token`` server-side.
 
-    Body: ``{public_token, conversation_id}``. Verifies the caller may access the
-    conversation (phase-2 store check → 404 hides existence) before exchanging,
-    persisting the linked item/accounts, and enqueueing the success reminder.
+    Body: ``{public_token, conversation_id}``. Verifies the conversation exists
+    (404 otherwise) before exchanging, persisting the linked item/accounts, and
+    enqueueing the success reminder.
     """
     from penny.tools._services.plaid_link import exchange_public_token
 
@@ -473,188 +223,66 @@ async def plaid_exchange(
 
     store = _get_conversation_store()
     try:
-        store.get_conversation(conversation_id, ctx)
+        store.get_conversation(conversation_id)
     except ConversationAccessError:
         raise HTTPException(status_code=404, detail="not found") from None
 
     db = get_db()
-    with db.session_for(ctx) as s:
+    with db.session() as s:
         return await exchange_public_token(
             s,
-            ctx,
             public_token=public_token,
             conversation_id=conversation_id,
-            queue=DbReminderQueue(ctx),
+            queue=DbReminderQueue(),
         )
 
 
 @app.post("/api/chat")
-async def chat(
-    request: Request,
-    ctx: RequestContext = Depends(request_context),
-) -> StreamingResponse:
+async def chat(request: Request) -> StreamingResponse:
     body: dict[str, Any] = await request.json()
     chat_id = str(body.get("id") or "default")
     prompt = _extract_prompt(body)
     user_message_id = _extract_user_message_id(body)
 
     store = _get_conversation_store()
-    # ``sessionMode`` from the body is honored ONLY when creating a new
-    # conversation; on an existing one the store ignores it (mode is immutable).
-    requested = str(body.get("sessionMode") or "individual")
-    try:
-        conv = store.ensure_conversation(chat_id, ctx, session_mode=requested)
-    except ConversationAccessError:
-        raise HTTPException(status_code=404, detail="not found") from None
-    except ValueError as exc:  # invalid sessionMode from the client
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    store.ensure_conversation(chat_id)
 
-    # Rebuild the turn's context from the conversation's STORED mode (not the
-    # request), so a joint thread always runs shared-only regardless of the
-    # body. Re-pin it here so the streaming task (which runs in a COPY of this
-    # context) also sees it; every DB session — including the agent's tools —
-    # is thus tenant-scoped. Cleared when the stream ends.
-    turn_ctx = _turn_context(ctx, conversation_mode=conv.session_mode)
-    set_request_context(turn_ctx)
-
-    # PRIOR-turn context, captured (tenant-scoped) BEFORE the current user turn
-    # is appended, so it excludes this turn (the loop appends the prompt itself).
-    prior_messages = parts_to_messages(
-        store.get_conversation_messages(chat_id, turn_ctx)
-    )
+    # PRIOR-turn context, captured BEFORE the current user turn is appended,
+    # so it excludes this turn (the loop appends the prompt itself).
+    prior_messages = parts_to_messages(store.get_conversation_messages(chat_id))
 
     # Persist the user turn up front (durable even on a mid-stream disconnect).
-    store.append_user_message(
-        chat_id, turn_ctx, ai_sdk_message_id=user_message_id, text=prompt
-    )
+    store.append_user_message(chat_id, ai_sdk_message_id=user_message_id, text=prompt)
     store.set_title_if_unset(chat_id, prompt)
 
-    # Pre-dispatch billing gate: decide how this turn is credentialed BEFORE any
-    # model work. Blocked → no model runs; stream the connect prompt instead.
-    decision = _resolve_gate(turn_ctx)
-    if isinstance(decision, billing_gate.Blocked):
-        return StreamingResponse(
-            _blocked_stream(store, chat_id, turn_ctx, decision.reason),
-            media_type="text/event-stream",
-            headers=_SSE_HEADERS,
-        )
-    run_credential, usage_pricer, subscribe_hook = _credential_wiring(
-        decision, turn_ctx
-    )
-
-    if _sandbox_flag():
-        # The loop runs in a per-conversation Modal sandbox. Fly renders the
-        # prompt, seeds prior turns, mints the MCP capability token (tenant-scoped
-        # by ctx), and relays the sandbox's events. The gate's credential and the
-        # tenancy context are threaded through; the sandbox holds no secret.
-        from .sandbox_wiring import sandboxed_stream_and_persist
-
-        seed = [m.model_dump(mode="json") for m in prior_messages]
-        return StreamingResponse(
-            sandboxed_stream_and_persist(
-                store=store,
-                conversation_id=chat_id,
-                ctx=turn_ctx,
-                prompt=prompt,
-                seed_messages=seed,
-                credential=run_credential,
-            ),
-            media_type="text/event-stream",
-            headers=_SSE_HEADERS,
-        )
-
-    # In-process path (default): materialize the workspace, build the agent,
-    # stream it locally, clearing the principal when the stream ends.
     session = InMemorySession(session_id=chat_id)
     if prior_messages:
         await session.add_messages(prior_messages)
 
-    async def _scoped_stream() -> AsyncIterator[str]:
-        # The response body iterates in a COPY of this context, so token-based
-        # reset would raise; clear the principal in the finally instead.
+    async def _stream() -> AsyncIterator[str]:
         try:
-            try:
-                async with _turn_workspace(turn_ctx) as checkout:
-                    await _maybe_enqueue_onboarding(turn_ctx, conversation_id=chat_id)
-                    agent = build_agent(
-                        model=build_model(credential=run_credential),
-                        session=session,
-                        persist_session=False,
-                        ctx=turn_ctx,
-                        workspace_dir=checkout.root,
-                        usage_pricer=usage_pricer,
-                        reminders=DbReminderQueue(turn_ctx),
-                        onboarding_resolver=resolve,
-                    )
-                    async for frame in stream_and_persist(
-                        agent,
-                        prompt,
-                        store=store,
-                        conversation_id=chat_id,
-                        ctx=turn_ctx,
-                        subscribe_bus=subscribe_hook,
-                    ):
-                        yield frame
-            except Exception as exc:
-                logger.exception("pre-stream setup failed for conversation {}", chat_id)
-                yield _sse({"type": "error", "errorText": str(exc)})
-                yield "data: [DONE]\n\n"
-        finally:
-            set_request_context(None)
+            await _maybe_enqueue_onboarding(chat_id)
+            agent = build_agent(
+                model=build_model(),
+                session=session,
+                persist_session=False,
+                reminders=DbReminderQueue(),
+                onboarding_resolver=resolve,
+            )
+            async for frame in stream_and_persist(
+                agent,
+                prompt,
+                store=store,
+                conversation_id=chat_id,
+            ):
+                yield frame
+        except Exception as exc:
+            logger.exception("pre-stream setup failed for conversation {}", chat_id)
+            yield _sse({"type": "error", "errorText": str(exc)})
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(
-        _scoped_stream(),
+        _stream(),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
-
-
-@app.post("/api/chat/{conversation_id}/cancel")
-async def cancel_chat(
-    conversation_id: str,
-    ctx: RequestContext = Depends(request_context),
-) -> dict[str, bool]:
-    """Route a browser stop to the sandbox runner's cancel endpoint (authed)."""
-    from .sandbox_wiring import cancel_active_run
-
-    return {"cancelled": await cancel_active_run(conversation_id)}
-
-
-@app.get("/api/chat/{conversation_id}/stream")
-async def resume_chat(
-    conversation_id: str,
-    ctx: RequestContext = Depends(request_context),
-) -> Response:
-    """Reconnect a browser to an in-flight sandboxed turn (authed).
-
-    The AI SDK's ``resumeStream()`` GETs this after a dropped connection; we
-    replay the turn's whole buffer then follow it live. ``204`` means nothing to
-    resume — the turn already finished (or never ran) — and the client falls back
-    to the persisted transcript it hydrated on load.
-    """
-    from .sandbox_wiring import resume_stream
-
-    gen = resume_stream(conversation_id, ctx)
-    if gen is None:
-        return Response(status_code=204)
-    return StreamingResponse(gen, media_type="text/event-stream", headers=_SSE_HEADERS)
-
-
-@app.post("/api/chat/{conversation_id}/finalize")
-async def finalize_chat(conversation_id: str, request: Request) -> Response:
-    """Runner→Fly persist callback (machine-to-machine).
-
-    The sandbox POSTs its finished event log here when the turn closes. Auth is
-    the per-turn **capability token** (``Authorization: Bearer``), NOT the user
-    session — so this is deliberately outside the Clerk ``request_context`` gate.
-    Idempotent: a retried delivery upserts the same assistant message.
-    """
-    from .sandbox_wiring import finalize_turn
-
-    auth = request.headers.get("authorization", "")
-    token = auth[7:].strip() if auth[:7].lower() == "bearer " else None
-    body = await request.json()
-    events = body.get("events") or []
-    store = _get_conversation_store()
-    ok = await finalize_turn(store, conversation_id, token, events)
-    return Response(status_code=204 if ok else 401)

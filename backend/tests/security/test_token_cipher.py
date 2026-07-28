@@ -86,18 +86,6 @@ def test_encrypt_token_at_rest_encrypts_when_key_present():
     assert decrypt_token(ct) == "tok"
 
 
-def test_encrypt_token_at_rest_dev_allows_plaintext(monkeypatch):
+def test_encrypt_token_at_rest_allows_plaintext_without_key(monkeypatch):
     monkeypatch.delenv("PENNY_PLAID_TOKEN_KEY", raising=False)
-    monkeypatch.setenv("PENNY_AUTH_MODE", "dev")
     assert encrypt_token_at_rest("tok") == "tok"
-
-
-def test_encrypt_token_at_rest_clerk_fails_closed(monkeypatch):
-    # F07: clerk (prod) mode with no key must raise, not store plaintext.
-    monkeypatch.delenv("PENNY_PLAID_TOKEN_KEY", raising=False)
-    monkeypatch.setenv("PENNY_AUTH_MODE", "clerk")
-    monkeypatch.setenv("PENNY_CLERK_ISSUER", "https://x.clerk.accounts.dev")
-    monkeypatch.setenv("PENNY_CLERK_JWKS_URL", "https://x.clerk.accounts.dev/jwks")
-    monkeypatch.setenv("PENNY_FRONTEND_ORIGIN", "https://penny.example.com")
-    with pytest.raises(RuntimeError, match="PENNY_PLAID_TOKEN_KEY"):
-        encrypt_token_at_rest("tok")

@@ -29,7 +29,6 @@ import io
 from pathlib import Path
 import tarfile
 import tempfile
-from typing import TYPE_CHECKING
 
 from sqlalchemy import insert, select
 
@@ -44,9 +43,6 @@ from penny.adapters.db.models import (
     TransactionCategoryEvent,
     TransactionTag,
 )
-
-if TYPE_CHECKING:
-    from penny.tenancy.context import RequestContext
 
 # Categorizer-reachable tables + their referential closure, in FK-safe insert
 # order. (FK enforcement is off on the fixture DB, but a sensible order keeps the
@@ -93,9 +89,7 @@ def snapshot_to_sqlite(src_db: DB, sqlite_path: str | Path) -> DB:
 
     Returns the open SQLite ``DB``. This is the neonctl-free replacement for a
     disposable Neon branch: a writable copy the eval can replay (and write) on
-    without touching prod. Reads whatever ``src_db`` exposes — pair it with the
-    read-only role + a set tenant context for RLS-scoped reads, or use
-    ``snapshot_finance_to_sqlite`` to union across a household's principals.
+    without touching prod. Reads whatever ``src_db`` exposes.
     """
     dst_db = DB(f"sqlite:///{sqlite_path}", enforce_sqlite_fks=False)
     dst_db.create_schema()
@@ -103,42 +97,11 @@ def snapshot_to_sqlite(src_db: DB, sqlite_path: str | Path) -> DB:
     return dst_db
 
 
-def snapshot_finance_to_sqlite(
-    readonly_db: DB,
-    principals: list[RequestContext] | None,
-    sqlite_path: str | Path,
-) -> DB:
-    """Snapshot the finance closure through the read-only role into writable SQLite.
-
-    On Postgres the read-only role is RLS-scoped, so a single connection sees only
-    one principal's rows. We iterate each ``principals`` context (individual mode:
-    the tenant's private rows + shared), pinning the tenant GUC per session, and
-    union the rows into SQLite (``INSERT OR IGNORE`` dedupes ``shared`` rows that
-    surface under multiple principals). On SQLite (dev/tests) there are no roles or
-    RLS, so a single unscoped copy is exact and ``principals`` is ignored.
-
-    Requiring ``principals`` on Postgres is deliberate: an unscoped read under the
-    RLS-scoped role with no tenant GUC set matches zero rows, which would silently
-    snapshot an empty finance set.
-    """
-    from penny.tenancy.context import reset_request_context, set_request_context
-
+def snapshot_finance_to_sqlite(readonly_db: DB, sqlite_path: str | Path) -> DB:
+    """Snapshot the finance closure through the read-only handle into SQLite."""
     dst_db = DB(f"sqlite:///{sqlite_path}", enforce_sqlite_fks=False)
     dst_db.create_schema()
-    if readonly_db.dialect == "sqlite":
-        _copy_tables(readonly_db, dst_db)  # dev/test: no roles, no RLS
-        return dst_db
-    if not principals:
-        raise ValueError(
-            "a Postgres finance snapshot requires tenant principals (RLS-scoped); "
-            "an unscoped read would return zero rows"
-        )
-    for ctx in principals:
-        token = set_request_context(ctx)
-        try:
-            _copy_tables(readonly_db, dst_db, on_conflict_ignore=True)
-        finally:
-            reset_request_context(token)
+    _copy_tables(readonly_db, dst_db)
     return dst_db
 
 

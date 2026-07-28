@@ -45,30 +45,16 @@ def test_save_plaid_item_never_double_encrypts(tmp_path, key):
     assert decrypt_token(stored) == "access-sandbox-123"
 
 
-def test_save_plaid_item_stores_plaintext_without_key_in_dev(tmp_path, monkeypatch):
-    # Dev (PENNY_AUTH_MODE=dev) without PENNY_PLAID_TOKEN_KEY keeps working;
+def test_save_plaid_item_stores_plaintext_without_key(tmp_path, monkeypatch):
+    # Without PENNY_PLAID_TOKEN_KEY the item keeps working in plaintext;
     # encryption engages once the key is configured (migration 017 encrypts the
     # backlog).
     monkeypatch.delenv("PENNY_PLAID_TOKEN_KEY", raising=False)
-    monkeypatch.setenv("PENNY_AUTH_MODE", "dev")
     db = _db(tmp_path)
     db.save_plaid_item(item_id="i1", access_token="tok")
     with db.session() as s:
         stored = s.execute(sa.text("SELECT access_token FROM plaid_items")).scalar()
     assert stored == "tok"
-
-
-def test_save_plaid_item_fails_closed_without_key_in_clerk_mode(tmp_path, monkeypatch):
-    # F07: clerk (prod) mode with no key must RAISE, never silently persist the
-    # Plaid access token in plaintext.
-    monkeypatch.delenv("PENNY_PLAID_TOKEN_KEY", raising=False)
-    monkeypatch.setenv("PENNY_AUTH_MODE", "clerk")
-    monkeypatch.setenv("PENNY_CLERK_ISSUER", "https://x.clerk.accounts.dev")
-    monkeypatch.setenv("PENNY_CLERK_JWKS_URL", "https://x.clerk.accounts.dev/jwks")
-    monkeypatch.setenv("PENNY_FRONTEND_ORIGIN", "https://penny.example.com")
-    db = _db(tmp_path)
-    with pytest.raises(RuntimeError, match="PENNY_PLAID_TOKEN_KEY"):
-        db.save_plaid_item(item_id="i1", access_token="tok")
 
 
 def test_plaid_client_decrypts_payload_token_at_the_wire(key):

@@ -86,7 +86,7 @@ def test_report_prompt_triggers_skill_for_period(period: str) -> None:
 
 
 def test_build_prompt_does_not_embed_recipients() -> None:
-    # Recipients are derived from the run's RequestContext by send_email_report,
+    # Recipients come from PENNY_REPORT_RECIPIENTS via send_email_report,
     # never embedded in the prompt — so the prompt passes through untouched.
     output = cli._build_prompt(prompt="Summarize spending.", prompt_key=None)
 
@@ -126,25 +126,9 @@ def _patch_run_and_exit_seams(
     # penny.agent_factory, so patch them on that module.
     import penny.agent_factory as factory
 
-    # Headless runs resolve the dev principal from env.
-    monkeypatch.setenv("PENNY_DEV_USER_ID", "11111111-1111-1111-1111-111111111111")
-    monkeypatch.setenv("PENNY_DEV_HOUSEHOLD_ID", "22222222-2222-2222-2222-222222222222")
     monkeypatch.setattr(factory, "build_model", lambda: object())
     monkeypatch.setattr(factory, "build_agent", _fake_build_agent)
 
-    # _drive_agent wraps the run in run_with_workspace (materialize -> run ->
-    # flush against Postgres+R2). That store lifecycle is exercised in
-    # tests/workspace_store/test_agent_wiring.py; here we stub it to just hand
-    # the run a temp checkout dir so this smoke test stays hermetic (no DB/R2).
-    import penny.workspace_store.sync as ws_sync
-
-    async def _fake_run_with_workspace(ctx: Any, run_fn: Any, **_: Any) -> Any:
-        from pathlib import Path
-        import tempfile
-
-        return await run_fn(Path(tempfile.mkdtemp(prefix="penny-ws-test-")))
-
-    monkeypatch.setattr(ws_sync, "run_with_workspace", _fake_run_with_workspace)
     # bootstrap is imported lazily inside _run_and_exit from penny.bootstrap.
     import penny.bootstrap as bootstrap_mod
 
@@ -185,35 +169,3 @@ def test_run_and_exit_no_output_exits_nonzero(
 
     # assert
     assert exc_info.value.exit_code == expected_code
-
-
-def test_run_household_uses_joint_cron_context(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``run --household`` drives the agent under the cron principal's JOINT
-    household context (not the dev principal), so ``send_email_report`` resolves
-    every household member rather than a single dev user."""
-    from penny.tenancy.context import SessionMode
-
-    captured = _patch_run_and_exit_seams(monkeypatch, output="done")
-    household_id = "ff85a755-a002-4697-8a5d-45f2f068ebf2"
-    monkeypatch.setenv("PENNY_CRON_HOUSEHOLD_ID", household_id)
-    monkeypatch.setenv("PENNY_CRON_USER_IDS", "6bdb105c-91ae-44c3-b362-c1ce539b3d3a")
-
-    # Capture the ctx the run executes under (run_with_workspace receives it).
-    import penny.workspace_store.sync as ws_sync
-
-    async def _capture_ctx(ctx: Any, run_fn: Any, **_: Any) -> Any:
-        from pathlib import Path
-        import tempfile
-
-        captured["ctx"] = ctx
-        return await run_fn(Path(tempfile.mkdtemp(prefix="penny-ws-test-")))
-
-    monkeypatch.setattr(ws_sync, "run_with_workspace", _capture_ctx)
-
-    cli.run(prompt="hi", prompt_key=None, max_turns=3, household=True)
-
-    ctx = captured["ctx"]
-    assert ctx.session_mode is SessionMode.JOINT
-    assert str(ctx.household_id) == household_id

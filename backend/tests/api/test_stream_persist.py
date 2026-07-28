@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import uuid
 
 from agent_harness.core.events import (
     EventBus,
@@ -19,11 +18,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from penny.api.bridge import stream_and_persist
 from penny.api.persistence.models import WebBase
 from penny.api.persistence.store import ConversationStore
-from penny.tenancy.context import RequestContext
-
-# Single principal for these store-mechanics tests; access checks pass
-# because every call in a test shares this context.
-_CTX = RequestContext(user_id=uuid.uuid4(), household_id=uuid.uuid4())
 
 
 def _make_store(tmp_path: Path) -> ConversationStore:
@@ -65,7 +59,7 @@ async def test_stream_and_persist_finalizes_complete_turn(tmp_path: Path):
     # input: a full, clean turn
     conversation_id = "conv-ok"
     store = _make_store(tmp_path)
-    store.ensure_conversation(conversation_id, _CTX)
+    store.ensure_conversation(conversation_id)
     events = [
         RunStart(run_id="run_1", agent_name="penny", prompt="q"),
         MessageDelta(message_id="m1", delta="hi", partial="hi"),
@@ -76,11 +70,9 @@ async def test_stream_and_persist_finalizes_complete_turn(tmp_path: Path):
 
     # act
     await _drain(
-        stream_and_persist(
-            agent, "q", store=store, conversation_id=conversation_id, ctx=_CTX
-        )
+        stream_and_persist(agent, "q", store=store, conversation_id=conversation_id)
     )
-    rows = store.get_conversation_messages(conversation_id, _CTX)
+    rows = store.get_conversation_messages(conversation_id)
     output = {"count": len(rows), "status": rows[0].status, "parts": rows[0].parts}
 
     # expected: one complete row with the finalized text
@@ -96,7 +88,7 @@ async def test_stream_and_persist_flushes_aborted_turn_as_error(tmp_path: Path):
     # input: a turn that drops the connection before RunEnd
     conversation_id = "conv-abort"
     store = _make_store(tmp_path)
-    store.ensure_conversation(conversation_id, _CTX)
+    store.ensure_conversation(conversation_id)
     events = [
         RunStart(run_id="run_2", agent_name="penny", prompt="q"),
         MessageDelta(message_id="m1", delta="partial", partial="partial"),
@@ -105,11 +97,9 @@ async def test_stream_and_persist_flushes_aborted_turn_as_error(tmp_path: Path):
 
     # act
     frames = await _drain(
-        stream_and_persist(
-            agent, "q", store=store, conversation_id=conversation_id, ctx=_CTX
-        )
+        stream_and_persist(agent, "q", store=store, conversation_id=conversation_id)
     )
-    rows = store.get_conversation_messages(conversation_id, _CTX)
+    rows = store.get_conversation_messages(conversation_id)
     output = {
         "count": len(rows),
         "status": rows[0].status,

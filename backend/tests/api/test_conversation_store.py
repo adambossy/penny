@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import uuid
 
 import pytest
 from sqlalchemy import create_engine
@@ -11,11 +10,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from penny.api.persistence.models import WebBase
 from penny.api.persistence.store import ConversationStore
-from penny.tenancy.context import RequestContext, SessionMode
-
-# The single principal these store-mechanics tests run as; access checks pass
-# because every call in a test shares this context.
-_CTX = RequestContext(user_id=uuid.uuid4(), household_id=uuid.uuid4())
 
 
 def _make_store(tmp_path: Path) -> ConversationStore:
@@ -28,7 +22,7 @@ def _make_store(tmp_path: Path) -> ConversationStore:
 
 
 def _seqs_and_roles(store: ConversationStore, conversation_id: str):
-    rows = store.get_conversation_messages(conversation_id, _CTX)
+    rows = store.get_conversation_messages(conversation_id)
     return [(row.seq, row.role, row.status) for row in rows]
 
 
@@ -38,20 +32,17 @@ def test_seq_is_monotonic_across_user_and_assistant(tmp_path: Path):
 
     # setup
     store = _make_store(tmp_path)
-    store.ensure_conversation(conversation_id, _CTX)
+    store.ensure_conversation(conversation_id)
 
     # act
-    store.append_user_message(conversation_id, _CTX, ai_sdk_message_id="u1", text="hi")
+    store.append_user_message(conversation_id, ai_sdk_message_id="u1", text="hi")
     store.upsert_assistant_message(
         conversation_id,
-        _CTX,
         ai_sdk_message_id="run_1",
         parts=[{"type": "text", "text": "hello", "state": "done"}],
         status="complete",
     )
-    store.append_user_message(
-        conversation_id, _CTX, ai_sdk_message_id="u2", text="again"
-    )
+    store.append_user_message(conversation_id, ai_sdk_message_id="u2", text="again")
     output = _seqs_and_roles(store, conversation_id)
 
     # expected
@@ -63,57 +54,25 @@ def test_seq_is_monotonic_across_user_and_assistant(tmp_path: Path):
     assert output == expected_output
 
 
-def test_user_turn_is_stamped_with_its_sender(tmp_path: Path):
-    # input: a joint-session context — exactly where attribution must not
-    # collapse to the nil sentinel that effective_user_id would produce.
-    conversation_id = "conv-sender"
-    ctx = RequestContext(
-        user_id=uuid.uuid4(),
-        household_id=uuid.uuid4(),
-        session_mode=SessionMode.JOINT,
-    )
-
-    # setup
-    store = _make_store(tmp_path)
-    store.ensure_conversation(conversation_id, ctx, session_mode="joint")
-
-    # act
-    store.append_user_message(conversation_id, ctx, ai_sdk_message_id="u1", text="hi")
-    store.upsert_assistant_message(
-        conversation_id,
-        ctx,
-        ai_sdk_message_id="run_1",
-        parts=[{"type": "text", "text": "hello", "state": "done"}],
-        status="complete",
-    )
-    rows = store.get_conversation_messages(conversation_id, ctx)
-    output = [(row.role, row.sender_user_id) for row in rows]
-
-    # expected: the user turn carries the real member id; assistant turns none
-    expected_output = [("user", ctx.user_id), ("assistant", None)]
-    assert output == expected_output
-
-
 def test_upsert_assistant_is_idempotent_by_ai_sdk_id(tmp_path: Path):
     # input
     conversation_id = "conv-2"
 
     # setup: a streaming placeholder, then finalize the same run
     store = _make_store(tmp_path)
-    store.ensure_conversation(conversation_id, _CTX)
+    store.ensure_conversation(conversation_id)
     store.upsert_assistant_message(
-        conversation_id, _CTX, ai_sdk_message_id="run_9", parts=[], status="streaming"
+        conversation_id, ai_sdk_message_id="run_9", parts=[], status="streaming"
     )
 
     # act: finalize the same ai_sdk_message_id
     store.upsert_assistant_message(
         conversation_id,
-        _CTX,
         ai_sdk_message_id="run_9",
         parts=[{"type": "text", "text": "done", "state": "done"}],
         status="complete",
     )
-    rows = store.get_conversation_messages(conversation_id, _CTX)
+    rows = store.get_conversation_messages(conversation_id)
     output = {
         "count": len(rows),
         "seq": rows[0].seq,
@@ -137,7 +96,7 @@ def test_set_title_if_unset_keeps_first_user_message(tmp_path: Path):
 
     # setup
     store = _make_store(tmp_path)
-    store.ensure_conversation(conversation_id, _CTX)
+    store.ensure_conversation(conversation_id)
 
     # act: derive once, then a second derive must not overwrite
     store.set_title_if_unset(conversation_id, "  How much   did I spend  ")
@@ -152,33 +111,27 @@ def test_set_title_if_unset_keeps_first_user_message(tmp_path: Path):
     assert output == expected_output
 
 
-def test_list_conversations_newest_first_and_tenant_scoped(tmp_path: Path):
+def test_list_conversations_newest_first(tmp_path: Path):
     from datetime import datetime
 
     from penny.api.persistence.models import Conversation
 
-    # setup: two household members. Alice's solo thread + a joint thread are
-    # visible to Alice; Bob's solo thread is not.
+    # setup: two threads with distinct updated_at
     store = _make_store(tmp_path)
-    household = uuid.uuid4()
-    alice = RequestContext(user_id=uuid.uuid4(), household_id=household)
-    bob = RequestContext(user_id=uuid.uuid4(), household_id=household)
-
-    store.ensure_conversation("alice-solo", alice)
-    store.ensure_conversation("bob-solo", bob)
-    store.ensure_conversation("shared", bob, session_mode="joint")
+    store.ensure_conversation("older")
+    store.ensure_conversation("newer")
 
     # Stamp distinct updated_at so newest-first ordering is deterministic.
     with store.session() as session:
-        session.get(Conversation, "alice-solo").updated_at = datetime(2026, 1, 1)
-        session.get(Conversation, "shared").updated_at = datetime(2026, 2, 1)
+        session.get(Conversation, "older").updated_at = datetime(2026, 1, 1)
+        session.get(Conversation, "newer").updated_at = datetime(2026, 2, 1)
 
     # act
-    rows = store.list_conversations(alice)
+    rows = store.list_conversations()
     output = [row.conversation_id for row in rows]
 
-    # expected: joint thread (newer) leads, then Alice's solo; Bob's solo hidden
-    expected_output = ["shared", "alice-solo"]
+    # expected: newest updated_at leads
+    expected_output = ["newer", "older"]
     assert output == expected_output
 
 

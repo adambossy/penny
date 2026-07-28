@@ -1,11 +1,10 @@
 """DB-backed reminder queue implementing the harness ``ReminderQueue`` protocol.
 
-Website/app state (decision D1/D5): a ``DbReminderQueue`` persists reminders in
-the ``web`` schema keyed by conversation, so an enqueue from one HTTP request
-(e.g. the Plaid exchange endpoint) survives until the *next* agent run drains it.
-It is injected into the agent (``build_agent(reminders=...)`` → ``Agent``) by the
-website; the agent factory never imports it, keeping agent/website segregation
-intact.
+A ``DbReminderQueue`` persists reminders keyed by conversation, so an enqueue
+from one HTTP request (e.g. the Plaid exchange endpoint) survives until the
+*next* agent run drains it. It is injected into the agent
+(``build_agent(reminders=...)`` → ``Agent``) by the app; the agent factory
+never imports it, keeping agent/app segregation intact.
 
 Override semantics mirror ``InMemoryReminderQueue``: ``override=True`` (default)
 upserts on ``(conversation_id, kind)`` so only the latest state of a kind flushes;
@@ -16,21 +15,32 @@ upserts on ``(conversation_id, kind)`` so only the latest state of a kind flushe
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
 import uuid
 
 from agent_harness.extras.reminders import Reminder
+from sqlalchemy.orm import Session
 
-from penny.tenancy.context import RequestContext
-
+from .engine import get_web_session_factory
 from .models import QueuedReminder
-from .tenant import owner_web_session
+
+
+@contextmanager
+def _web_session() -> Iterator[Session]:
+    session = get_web_session_factory()()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 class DbReminderQueue:
-    """A ``ReminderQueue`` backed by ``web.queued_reminders`` for one principal."""
-
-    def __init__(self, ctx: RequestContext) -> None:
-        self._ctx = ctx
+    """A ``ReminderQueue`` backed by the ``queued_reminders`` table."""
 
     async def enqueue(
         self, session_id: str, kind: str, content: str, *, override: bool = True
@@ -41,21 +51,17 @@ class DbReminderQueue:
         self, session_id: str, kind: str, content: str, override: bool
     ) -> None:
         stored_kind = kind if override else f"{kind}#{uuid.uuid4().hex[:8]}"
-        with owner_web_session(self._ctx) as s:
+        with _web_session() as s:
             if override:
                 s.query(QueuedReminder).filter_by(
                     conversation_id=session_id,
                     kind=kind,
-                    household_id=self._ctx.household_id,
-                    owner_user_id=self._ctx.user_id,
                 ).delete(synchronize_session=False)
             s.add(
                 QueuedReminder(
                     conversation_id=session_id,
                     kind=stored_kind,
                     content=content,
-                    household_id=self._ctx.household_id,
-                    owner_user_id=self._ctx.user_id,
                 )
             )
 
@@ -63,14 +69,10 @@ class DbReminderQueue:
         return await asyncio.to_thread(self._drain_sync, session_id)
 
     def _drain_sync(self, session_id: str) -> list[Reminder]:
-        with owner_web_session(self._ctx) as s:
+        with _web_session() as s:
             rows = (
                 s.query(QueuedReminder)
-                .filter_by(
-                    conversation_id=session_id,
-                    household_id=self._ctx.household_id,
-                    owner_user_id=self._ctx.user_id,
-                )
+                .filter_by(conversation_id=session_id)
                 .order_by(QueuedReminder.id)
                 .all()
             )

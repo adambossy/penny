@@ -370,10 +370,6 @@ class SyncTool:
                     total_added=0, total_modified=0, total_removed=0, items_synced=0
                 )
 
-            # Scoped to the current RequestContext's sync principal (household +
-            # owner). The write role bypasses RLS, so this app-level filter is the
-            # tenant boundary — a sync must only touch its principal's items, and
-            # the new rows are stamped with that same principal.
             plaid_items = self._db.list_plaid_items_for_context()
             if not plaid_items:
                 return SyncSummary(

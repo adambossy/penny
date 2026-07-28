@@ -1,13 +1,13 @@
-"""Conversation-persistence ORM models on the website's own ``Base``.
+"""Conversation-persistence ORM models on the app store's own ``Base``.
 
 These tables are deliberately **not** registered on the finance
 ``penny.adapters.db.models.Base``. Keeping them on a separate declarative base
-(and a separate engine — see ``engine.py``) is what keeps the agent's
-``run_sql`` blast radius scoped to the finance schema.
+(and a separate engine — see ``engine.py``) keeps app bookkeeping distinct
+from the finance schema.
 
 A message stores its ordered AI SDK ``parts`` as a single JSON array column —
 the natural read/write unit is the whole UIMessage, and we never query across
-individual parts. See the plan (§1) for the JSON-column rationale.
+individual parts.
 """
 
 from __future__ import annotations
@@ -35,41 +35,26 @@ from sqlalchemy.orm import (
     relationship,
 )
 
-# Logical schema name for the conversation tables. On Postgres the engine maps
-# this to a real ``web`` schema (segregation lever); on SQLite the engine maps
-# it to ``None`` (SQLite has no schemas). See ``engine.py``.
+# Logical schema name for the app tables. On Postgres the engine maps this to
+# a real ``web`` schema; on SQLite the engine maps it to ``None`` (SQLite has
+# no schemas). See ``engine.py``.
 WEB_SCHEMA = "web"
 
 
 class WebBase(DeclarativeBase):
-    """Declarative base for website-owned (non-finance) tables."""
+    """Declarative base for app-owned (non-finance) tables."""
 
     pass
 
 
 class Conversation(WebBase):
-    """A single chat conversation. PK is the client-generated UUID.
-
-    NOTE: ``account_id`` is intentionally absent. It is a future additive
-    column (added when the product grows per-account conversations); there is
-    no ``accounts`` table in this rollout.
-    """
+    """A single chat conversation. PK is the client-generated UUID."""
 
     __tablename__ = "conversations"
     __table_args__ = {"schema": WEB_SCHEMA}
 
     conversation_id: Mapped[str] = mapped_column(String, primary_key=True)
     title: Mapped[str | None] = mapped_column(String, nullable=True)
-    # Tenant scoping (set at creation, immutable). ``session_mode`` derives
-    # visibility: ``individual`` → owner-only, ``joint`` → household-shared.
-    # On Postgres these are also fenced by the ``tenant_isolation`` RLS policy
-    # (migration 019); on SQLite dev the store's app-layer filter is the only
-    # tenant layer.
-    household_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
-    owner_user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
-    session_mode: Mapped[str] = mapped_column(
-        String, nullable=False, server_default=text("'individual'")
-    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
@@ -123,12 +108,6 @@ class ConversationMessage(WebBase):
     ai_sdk_message_id: Mapped[str | None] = mapped_column(String, nullable=True)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     role: Mapped[str] = mapped_column(String, nullable=False)  # user / assistant
-    # The household member who wrote a user turn (stamped from the real
-    # ``ctx.user_id``, never the joint nil sentinel). NULL on assistant turns
-    # and on rows written before attribution existed — absence is a normal
-    # state, so there is no backfill. Bare UUID, no cross-schema FK (mirrors
-    # ``Conversation.owner_user_id``).
-    sender_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     parts: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
     status: Mapped[str] = mapped_column(
         String, nullable=False, server_default=text("'complete'")
@@ -148,16 +127,11 @@ class ConversationMessage(WebBase):
 class QueuedReminder(WebBase):
     """A backend-enqueued ``<system-reminder>`` awaiting the next agent turn.
 
-    Website/app state (decision D1): the harness drains these into the outgoing
-    user message via the injected ``ReminderQueue``; keeping them in the ``web``
-    schema keeps them out of the agent's ``run_sql`` blast radius.
-
-    Owner-scoped within a household (decision D3): ``household_id`` +
-    ``owner_user_id`` are stamped from the ``RequestContext`` at enqueue and are
-    the tenant terms of the RLS policy (migration 023) and the SQLite app-layer
-    filter. ``(conversation_id, kind)`` is unique so ``override=True`` is an
-    upsert; a non-override enqueue suffixes ``kind`` (``kind#<hex>``) to append
-    without colliding — the queue strips the suffix when building ``Reminder``.
+    App state: the harness drains these into the outgoing user message via the
+    injected ``ReminderQueue``. ``(conversation_id, kind)`` is unique so
+    ``override=True`` is an upsert; a non-override enqueue suffixes ``kind``
+    (``kind#<hex>``) to append without colliding — the queue strips the suffix
+    when building ``Reminder``.
     """
 
     __tablename__ = "queued_reminders"
@@ -171,34 +145,29 @@ class QueuedReminder(WebBase):
 
     # Autoincrement integer PK so ``ORDER BY id`` is exact insertion order —
     # reliable FIFO drain even when several reminders land in the same clock
-    # second (decision D9); mirrors the sibling web tables' surrogate keys.
+    # second; mirrors the sibling tables' surrogate keys.
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[str] = mapped_column(String, nullable=False)
     kind: Mapped[str] = mapped_column(String, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    household_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
-    owner_user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
 
 
 class OnboardingItem(WebBase):
-    """One progressive-onboarding step's state for one user.
+    """One progressive-onboarding step's state.
 
-    Website/app state (decision D1) in the ``web`` schema, owner-scoped within a
-    household (decision D3): a spouse never sees the other's items. ``status`` is
-    the only stored state (``pending`` → ``accepted``/``dismissed``); activation
-    is *computed* per turn by the trigger engine, never stored (spec §4).
-    ``trigger_state`` holds the deterministic per-item counters/bookkeeping the
-    engine reads (categorized-turn count, corrections, once-per-session stamp).
+    ``status`` is the only stored state (``pending`` → ``accepted``/
+    ``dismissed``); activation is *computed* per turn by the trigger engine,
+    never stored. ``trigger_state`` holds the deterministic per-item
+    counters/bookkeeping the engine reads (categorized-turn count, corrections,
+    once-per-session stamp).
     """
 
     __tablename__ = "onboarding_items"
     __table_args__ = (
-        UniqueConstraint(
-            "owner_user_id", "item_key", name="uq_onboarding_items_owner_item"
-        ),
+        UniqueConstraint("item_key", name="uq_onboarding_items_item"),
         CheckConstraint(
             "status IN ('pending', 'accepted', 'dismissed')",
             name="ck_onboarding_items_status",
@@ -207,8 +176,6 @@ class OnboardingItem(WebBase):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    household_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
-    owner_user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
     item_key: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(
         String, nullable=False, server_default=text("'pending'")

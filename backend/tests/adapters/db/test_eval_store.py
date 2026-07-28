@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
-import uuid
 
 from penny.adapters.db.facade import DB
 from penny.adapters.db.models import EvalItem, EvalRun, PlaidTransaction
@@ -27,7 +26,6 @@ def _seed_txn(
     external_id: str,
     created_at: datetime,
     reporting_mode: str | None = None,
-    household_id: uuid.UUID | None = None,
 ) -> int:
     with db.session() as session:
         plaid = PlaidTransaction(
@@ -51,27 +49,10 @@ def _seed_txn(
             merchant_descriptor=f"MERCHANT {external_id}",
             created_at=created_at,
             reporting_mode=reporting_mode,
-            household_id=household_id,
         )
         session.add(txn)
         session.flush()
         return int(txn.transaction_id)
-
-
-def test_cohort_scoped_to_household(tmp_path: Path) -> None:
-    """derived_ids_created_since(household_id=…) returns only that household."""
-    db = _create_db(tmp_path)
-    hh_a, hh_b = uuid.uuid4(), uuid.uuid4()
-    a = _seed_txn(
-        db, external_id="a", created_at=datetime(2026, 6, 1, 8, 0), household_id=hh_a
-    )
-    _seed_txn(
-        db, external_id="b", created_at=datetime(2026, 6, 1, 9, 0), household_id=hh_b
-    )
-
-    assert db.derived_ids_created_since(None, household_id=hh_a) == [a]
-    # Unscoped (dev/SQLite path) still returns both.
-    assert len(db.derived_ids_created_since(None)) == 2
 
 
 def test_cohort_and_sweep_skip_investment_trades(tmp_path: Path) -> None:
@@ -175,25 +156,6 @@ def test_watermark_ignores_skipped_runs(tmp_path: Path) -> None:
         cohort_size=0,
         cohort_max_created_at=None,
     )
-    assert db.last_eval_watermark() == datetime(2026, 6, 3, 8, 0)
-
-
-def test_watermark_scoped_per_household(tmp_path: Path) -> None:
-    """A completed run for household A must not gate household B's watermark."""
-    db = _create_db(tmp_path)
-    hh_a, hh_b = uuid.uuid4(), uuid.uuid4()
-    db.record_eval_run(
-        run_at=datetime(2026, 6, 27, 0, 0),
-        status="completed",
-        cohort_size=1,
-        cohort_max_created_at=datetime(2026, 6, 3, 8, 0),
-        household_id=hh_a,
-    )
-    # B has no completed run yet: its watermark is None (not A's), so B's whole
-    # history is still in scope.
-    assert db.last_eval_watermark(household_id=hh_b) is None
-    assert db.last_eval_watermark(household_id=hh_a) == datetime(2026, 6, 3, 8, 0)
-    # Unscoped (dev/SQLite) still sees the global max.
     assert db.last_eval_watermark() == datetime(2026, 6, 3, 8, 0)
 
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-import uuid
 
 from agent_harness.core.events import (
     Error,
@@ -31,11 +30,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from penny.api.accumulator import MessageAccumulator
 from penny.api.persistence.models import WebBase
 from penny.api.persistence.store import ConversationStore
-from penny.tenancy.context import RequestContext
-
-# Single principal for these store-mechanics tests; access checks pass
-# because every call in a test shares this context.
-_CTX = RequestContext(user_id=uuid.uuid4(), household_id=uuid.uuid4())
 
 _TS = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -244,7 +238,7 @@ def test_accumulated_turn_persists_as_one_reconciled_row(tmp_path: Path):
     # what stream_and_persist does (insert on RunStart, finalize on RunEnd).
     conversation_id = "conv-acc"
     store = _make_store(tmp_path)
-    store.ensure_conversation(conversation_id, _CTX)
+    store.ensure_conversation(conversation_id)
 
     events = [
         RunStart(run_id="run_x", agent_name="penny", prompt="q"),
@@ -260,7 +254,6 @@ def test_accumulated_turn_persists_as_one_reconciled_row(tmp_path: Path):
         if isinstance(event, RunStart):
             store.upsert_assistant_message(
                 conversation_id,
-                _CTX,
                 ai_sdk_message_id=acc.run_id,
                 parts=acc.parts(),
                 status="streaming",
@@ -268,13 +261,12 @@ def test_accumulated_turn_persists_as_one_reconciled_row(tmp_path: Path):
         if isinstance(event, RunEnd):
             store.upsert_assistant_message(
                 conversation_id,
-                _CTX,
                 ai_sdk_message_id=acc.run_id,
                 parts=acc.parts(),
                 status=acc.status,
             )
 
-    rows = store.get_conversation_messages(conversation_id, _CTX)
+    rows = store.get_conversation_messages(conversation_id)
     output = {
         "count": len(rows),
         "status": rows[0].status,
