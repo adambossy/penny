@@ -8,44 +8,28 @@ client — no real Plaid — with the @tool wrappers invoked via ``.fn()``.
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 
-from penny.adapters.db.models import Household, PlaidItem, User
+from penny.adapters.db.models import PlaidItem
 from penny.db import get_db
-from penny.tenancy.context import (
-    RequestContext,
-    reset_request_context,
-    set_request_context,
-)
 from penny.tools import plaid as plaid_tools, plaid_link as plaid_link_tools
 from penny.tools._services import plaid_link as plaid_link_service
 
 
-def _seed_item(*, item_id: str, institution_name: str | None) -> RequestContext:
-    """Seed a household/user + one PlaidItem, returning that principal's context."""
+def _seed_item(*, item_id: str, institution_name: str | None) -> None:
+    """Seed one PlaidItem."""
     db = get_db()
     db.create_schema()
-    hh = uuid.uuid4()
-    u = uuid.uuid4()
     with db.session() as s:
-        s.add(Household(household_id=hh, name="H"))
-        s.flush()
-        s.add(User(user_id=u, household_id=hh, email="a@x.com"))
-        s.flush()
         s.add(
             PlaidItem(
                 item_id=item_id,
                 access_token="enc-token",
                 institution_id="ins_1",
                 institution_name=institution_name,
-                household_id=hh,
-                owner_user_id=u,
             )
         )
         s.flush()
-    return RequestContext(user_id=u, household_id=hh)
 
 
 class _FakeStatusClient:
@@ -115,18 +99,14 @@ async def test_connection_status_healthy_item(
 async def test_relink_account_mints_update_token(
     isolated_db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    ctx = _seed_item(item_id="item-1", institution_name="Alliant")
+    _seed_item(item_id="item-1", institution_name="Alliant")
     fake = _FakeLinkClient()
     monkeypatch.setenv("PENNY_PLAID_LINK_MODE", "hosted")
     monkeypatch.setattr(
         plaid_link_service.PlaidClient, "from_env", classmethod(lambda cls: fake)
     )
 
-    token = set_request_context(ctx)
-    try:
-        result = await plaid_link_tools.relink_account.fn(item_id="item-1")
-    finally:
-        reset_request_context(token)
+    result = await plaid_link_tools.relink_account.fn(item_id="item-1")
 
     assert result["mode"] == "update"
     assert result["link_token"] == "link-sandbox-update"
@@ -140,14 +120,10 @@ async def test_relink_account_mints_update_token(
 async def test_relink_account_unknown_item_errors(
     isolated_db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    ctx = _seed_item(item_id="item-1", institution_name="Alliant")
+    _seed_item(item_id="item-1", institution_name="Alliant")
     monkeypatch.setenv("PENNY_PLAID_LINK_MODE", "hosted")
 
-    token = set_request_context(ctx)
-    try:
-        result = await plaid_link_tools.relink_account.fn(item_id="does-not-exist")
-    finally:
-        reset_request_context(token)
+    result = await plaid_link_tools.relink_account.fn(item_id="does-not-exist")
 
     assert result["status"] == "error"
     assert "does-not-exist" in result["message"]

@@ -5,11 +5,10 @@ deployment (productionization B-6): the ``react-plaid-link`` picker runs in the
 browser and the ``public_token`` is exchanged **server-side** here. The localhost
 flow stays for dev behind ``PENNY_PLAID_LINK_MODE=localhost``.
 
-``create_link_token`` mints a token for the authenticated user;
+``create_link_token`` mints a token for the local user;
 ``exchange_public_token`` exchanges it, encrypts the access token at rest, writes
-the finance ``PlaidItem`` + ``PlaidAccount`` rows (owner/household from ``ctx``,
-visibility ``private``), kicks off the first sync, and enqueues a ``plaid_link``
-success reminder. All external collaborators (Plaid client, sync, reminder queue)
+the finance ``PlaidItem`` + ``PlaidAccount`` rows, kicks off the first sync, and
+enqueues a ``plaid_link`` success reminder. All external collaborators (Plaid client, sync, reminder queue)
 are injectable so tests drive the flow with fakes and no real Plaid.
 """
 
@@ -27,7 +26,6 @@ from loguru import logger
 from penny.adapters.clients.plaid import PlaidClient
 from penny.adapters.db.models import PlaidAccount, PlaidItem
 from penny.security.token_cipher import encrypt_token_at_rest
-from penny.tenancy.context import RequestContext
 
 
 class _ReminderQueue(Protocol):
@@ -82,7 +80,6 @@ def create_link_token(
 
 async def exchange_public_token(
     session: Any,
-    ctx: RequestContext,
     *,
     public_token: str,
     conversation_id: str,
@@ -93,9 +90,9 @@ async def exchange_public_token(
     """Exchange a ``public_token`` and persist the linked item + accounts.
 
     Encrypts the access token at rest, inserts the ``PlaidItem`` and its
-    ``PlaidAccount`` rows (owner = ``ctx.user``, visibility ``private``), fires
-    the first sync (fire-and-forget), and enqueues a ``plaid_link`` reminder so
-    the next turn relays the success. Returns ``{item_id, accounts}``.
+    ``PlaidAccount`` rows, fires the first sync (fire-and-forget), and enqueues
+    a ``plaid_link`` reminder so the next turn relays the success. Returns
+    ``{item_id, accounts}``.
 
     ``queue`` is injected by the website runtime (the concrete web-backed
     ``DbReminderQueue`` lives in the website persistence package) — the agent
@@ -112,17 +109,14 @@ async def exchange_public_token(
         "institution_name"
     ) or "Your bank"
 
-    # At-rest encryption, mirroring the facade's rule: dev without a key stores
-    # plaintext, but clerk (prod) mode fails closed if the key is missing rather
-    # than silently persisting a bank access token in cleartext (F07).
+    # At-rest encryption when PENNY_PLAID_TOKEN_KEY is configured (opt-in
+    # single-player; the local DB file is the user's own).
     stored_token = encrypt_token_at_rest(access_token)
     session.add(
         PlaidItem(
             item_id=item_id,
             access_token=stored_token,
             institution_name=institution,
-            household_id=ctx.household_id,
-            owner_user_id=ctx.user_id,
         )
     )
     # Flush the item before its accounts so the FK (accounts.item_id →
@@ -133,16 +127,13 @@ async def exchange_public_token(
             PlaidAccount(
                 account_id=account["account_id"],
                 item_id=item_id,
-                owner_user_id=ctx.user_id,
-                household_id=ctx.household_id,
-                visibility="private",
                 name=account.get("name"),
             )
         )
     session.flush()
 
     # First sync: fire-and-forget so the exchange returns immediately.
-    (sync or _default_sync(ctx))(item_id)
+    (sync or _default_sync())(item_id)
 
     content = (
         f"{institution} linked ({len(accounts)} accounts; first sync started). "
@@ -153,22 +144,20 @@ async def exchange_public_token(
     return {"item_id": item_id, "accounts": len(accounts)}
 
 
-def _default_sync(ctx: RequestContext) -> Callable[[str], None]:
-    """Return a fire-and-forget first-sync callable bound to ``ctx``.
+def _default_sync() -> Callable[[str], None]:
+    """Return a fire-and-forget first-sync callable.
 
-    Runs the existing sync service in a daemon thread (its own event loop +
-    request context) so a linked item pulls transactions without blocking the
-    exchange response. Best-effort: failures are logged, never raised.
+    Runs the existing sync service in a daemon thread (its own event loop) so a
+    linked item pulls transactions without blocking the exchange response.
+    Best-effort: failures are logged, never raised.
     """
 
     def _kick(item_id: str) -> None:
         def _run() -> None:
             from penny.db import get_db
             from penny.services import build_categorizer, get_taxonomy
-            from penny.tenancy.context import set_request_context
             from penny.tools._services.sync_service import SyncTool
 
-            set_request_context(ctx)
             try:
                 tool = SyncTool(
                     plaid_client=PlaidClient.from_env(),

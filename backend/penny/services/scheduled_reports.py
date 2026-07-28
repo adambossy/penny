@@ -59,7 +59,7 @@ def report_prompt(period: ReportPeriod) -> str:
     the system prompt's Runtime Context (it never reads a ``report-*`` key), and
     asks for email delivery — the skill (and system prompt) only call
     ``send_email_report`` when the request asks for an emailed report, and the
-    recipient is resolved from the run's ``RequestContext`` (never named here).
+    recipient is resolved from configuration (never named here).
     Without the explicit "email it to me", a scheduled run would generate the
     report but never send it (exit 0, no email).
     """

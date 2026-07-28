@@ -14,34 +14,25 @@ from typing import Any
 
 from agent_harness import tool
 
-from penny.adapters.db.models import User
-from penny.db import get_db
 from penny.services.email import EmailService, SMTPConfig
-from penny.tenancy.context import RequestContext, SessionMode, require_request_context
 from penny.tools._services.uploader import upload_artifact
 
 
-def resolve_report_recipients(session, ctx: RequestContext) -> list[str]:
-    """Recipients for a report, derived ENTIRELY from the authed context.
+def resolve_report_recipients() -> list[str]:
+    """Recipients for a report, from configuration — never from the agent.
 
-    Individual context → just that user's verified email. Joint/household
-    context → every household member with a linked identity
-    (``external_auth_id`` set); pending invitees are excluded. The agent cannot
-    name, add, or influence a recipient — the injection surface is removed, not
-    validated. Identity tables carry no RLS, so a plain session works.
+    ``PENNY_REPORT_RECIPIENTS`` is a comma-separated list set at onboarding
+    (``penny init``). The agent cannot name, add, or influence a recipient —
+    the injection surface is removed, not validated.
     """
-    if ctx.session_mode is SessionMode.JOINT:
-        rows = (
-            session.query(User)
-            .filter(
-                User.household_id == ctx.household_id,
-                User.external_auth_id.isnot(None),
-            )
-            .all()
+    raw = os.environ.get("PENNY_REPORT_RECIPIENTS", "").strip()
+    recipients = [addr.strip() for addr in raw.split(",") if addr.strip()]
+    if not recipients:
+        raise RuntimeError(
+            "PENNY_REPORT_RECIPIENTS is not configured — run `penny init` "
+            "or set it in the environment"
         )
-        return [r.email for r in rows]
-    row = session.query(User).filter(User.user_id == ctx.user_id).one()
-    return [row.email]
+    return recipients
 
 
 def _coerce_bool(value: str | None, *, default: bool) -> bool:
@@ -131,12 +122,11 @@ async def send_email_report(
     html_content: str,
     text_content: str,
 ) -> dict[str, Any]:
-    """Email a rendered report to the authenticated account(s).
+    """Email a rendered report to the configured recipient(s).
 
-    Recipients are derived from the authenticated context — the personal report
-    goes to that user, a household report to all household members — and cannot
-    be named or influenced by the caller. There is deliberately no recipient
-    argument.
+    Recipients come from configuration (``PENNY_REPORT_RECIPIENTS``, set at
+    onboarding) and cannot be named or influenced by the caller. There is
+    deliberately no recipient argument.
 
     Args:
         subject: Email subject line.
@@ -146,9 +136,7 @@ async def send_email_report(
 
     def _run() -> dict[str, Any]:
         try:
-            ctx = require_request_context()
-            with get_db().session() as session:
-                recipients = resolve_report_recipients(session, ctx)
+            recipients = resolve_report_recipients()
             service = _build_email_service()
             result = service.send_report(
                 to=recipients,

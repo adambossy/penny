@@ -16,7 +16,6 @@ from typing import Any
 
 from agent_harness import tool
 
-from penny.tenancy.context import require_request_context
 from penny.tools._services.onboarding import OnboardingResolver
 
 
@@ -40,7 +39,6 @@ def make_resolve_onboarding_item(resolver: OnboardingResolver | None):
         """
         if resolver is None:
             raise RuntimeError("onboarding resolver is not configured for this run")
-        ctx = require_request_context()
-        return await asyncio.to_thread(resolver, ctx, item_key, action)
+        return await asyncio.to_thread(resolver, item_key, action)
 
     return resolve_onboarding_item

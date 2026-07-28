@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from penny.tenancy.context import RequestContext
-
 
 class OnboardingResolver(Protocol):
     """Persist a user's accept/decline of an onboarding step.
@@ -21,6 +19,4 @@ class OnboardingResolver(Protocol):
     key/action (a model mistake surfaces as recoverable tool output).
     """
 
-    def __call__(
-        self, ctx: RequestContext, item_key: str, action: str
-    ) -> dict[str, str]: ...
+    def __call__(self, item_key: str, action: str) -> dict[str, str]: ...

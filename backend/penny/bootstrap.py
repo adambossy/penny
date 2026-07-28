@@ -5,102 +5,41 @@ Idempotent. Safe to call on every backend startup.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
-import uuid
 
 from loguru import logger
 from sqlalchemy.orm import Session
 import yaml
 
-from .adapters.db.models import Category, Household, User
+from .adapters.db.models import Category
 from .db import get_db
 
 _TAXONOMY_YAML = Path(__file__).resolve().parent.parent / "configs" / "taxonomy.yaml"
 
 
 def bootstrap() -> None:
-    """Ensure schema + seed the dev identity.
+    """Ensure schema + seed the taxonomy.
 
-    SQLite (dev/test) builds the schema from the models via ``create_all``.
-    On Postgres the schema is owned by alembic and applied out of band by
-    ``penny migrate`` (the deploy ``release_command``), so bootstrap creates
-    nothing there — it only seeds, which is a no-op on prod (no ``PENNY_DEV_*``).
+    SQLite builds the schema from the models via ``create_all``. On Postgres
+    the schema is owned by alembic and applied by ``penny migrate`` (run
+    automatically at onboarding / server startup), so bootstrap creates
+    nothing there — it only seeds.
     """
     db = get_db()
     if db.dialect == "sqlite":
-        _ensure_tenant_schema(db)
         db.create_schema()
-        # Website-owned conversation store: a SEPARATE engine + schema/DB from
-        # the finance tables above (see api/persistence/engine.py). On Postgres
-        # its web.* tables are created by the same alembic chain (migration 019).
+        # App-owned conversation store: a SEPARATE engine + schema/DB from
+        # the finance tables above (see api/persistence/engine.py).
         from .api.persistence.engine import create_web_schema
 
         create_web_schema()
-    _seed_dev_household()
+    with db.session() as session:
+        seed_taxonomy(session)
 
 
-def _ensure_tenant_schema(db) -> None:  # noqa: ANN001 - facade type, avoids import noise
-    """Fail fast — and clearly — on a database that predates phase 1a.
-
-    ``create_all`` only creates missing tables; it can never ALTER the tenant
-    columns into pre-existing ones, so a stale dev SQLite file would otherwise
-    limp into obscure 'no such column: categories.household_id' errors on the
-    first query. Name the problem and the ways out instead.
-    """
-    import sqlalchemy as sa
-
-    inspector = sa.inspect(db._engine)
-    if "categories" not in inspector.get_table_names():
-        return  # fresh database; create_all builds the current schema
-    columns = {c["name"] for c in inspector.get_columns("categories")}
-    if "household_id" in columns:
-        return
-    raise RuntimeError(
-        "This database predates the multi-tenant schema (phase 1a): "
-        "'categories' has no household_id column, and startup schema creation "
-        "cannot add columns to existing tables. Either delete the dev SQLite "
-        "file and let bootstrap re-create it (then re-sync), or run the "
-        "alembic migrations (backend/db/migrations) against this database."
-    )
-
-
-def _seed_dev_household() -> None:
-    """Ensure the PENNY_DEV_* principal exists and has a taxonomy.
-
-    Categories are per-household, so seeding needs a household to seed *for*.
-    In dev that is the env-pinned principal; with no PENNY_DEV_* configured
-    (e.g. prod, where identity comes from the phase-3 cutover / phase-2 auth)
-    this is a no-op.
-    """
-    household_raw = os.environ.get("PENNY_DEV_HOUSEHOLD_ID", "").strip()
-    user_raw = os.environ.get("PENNY_DEV_USER_ID", "").strip()
-    if not household_raw or not user_raw:
-        logger.debug("PENNY_DEV_* principal not configured; skipping taxonomy seed.")
-        return
-    household_id = uuid.UUID(household_raw)
-    user_id = uuid.UUID(user_raw)
-    email = os.environ.get("PENNY_DEV_USER_EMAIL", "").strip() or "dev@example.com"
-
-    db = get_db()
-    from .tenancy.context import RequestContext
-
-    # session_for pins the household so the inserts pass RLS WITH CHECK on
-    # Postgres (categories carry a household-only policy).
-    ctx = RequestContext(user_id=user_id, household_id=household_id)
-    with db.session_for(ctx) as session:
-        if session.get(Household, household_id) is None:
-            session.add(Household(household_id=household_id, name="Dev Household"))
-            session.flush()
-        if session.get(User, user_id) is None:
-            session.add(User(user_id=user_id, household_id=household_id, email=email))
-            session.flush()
-        seed_taxonomy_for_household(session, household_id)
-
-
-def seed_taxonomy_for_household(session: Session, household_id: uuid.UUID) -> None:
-    """Seed the YAML taxonomy for ``household_id`` if it has no categories."""
+def seed_taxonomy(session: Session) -> None:
+    """Seed the YAML taxonomy if the database has no categories."""
     if not _TAXONOMY_YAML.exists():
         logger.warning(
             "Taxonomy YAML missing at {} — skipping seed. Run `uv run "
@@ -109,13 +48,9 @@ def seed_taxonomy_for_household(session: Session, household_id: uuid.UUID) -> No
         )
         return
 
-    existing = session.query(Category).filter_by(household_id=household_id).count()
+    existing = session.query(Category).count()
     if existing > 0:
-        logger.debug(
-            "Household {} already has {} categories; skip seed.",
-            household_id,
-            existing,
-        )
+        logger.debug("Database already has {} categories; skip seed.", existing)
         return
 
     raw = yaml.safe_load(_TAXONOMY_YAML.read_text(encoding="utf-8"))
@@ -127,7 +62,7 @@ def seed_taxonomy_for_household(session: Session, household_id: uuid.UUID) -> No
     by_key: dict[str, Category] = {}
     for row in raw:
         if row.get("parent_key") is None:
-            cat = _row_to_category(row, parent_id=None, household_id=household_id)
+            cat = _row_to_category(row, parent_id=None)
             session.add(cat)
             session.flush()
             by_key[cat.key] = cat
@@ -141,27 +76,21 @@ def seed_taxonomy_for_household(session: Session, household_id: uuid.UUID) -> No
                 "Skipping {!r} — parent {!r} not found", row.get("key"), parent_key
             )
             continue
-        cat = _row_to_category(
-            row, parent_id=parent.category_id, household_id=household_id
-        )
+        cat = _row_to_category(row, parent_id=parent.category_id)
         session.add(cat)
     session.flush()
     logger.info(
-        "Seeded {} categories for household {} from {}",
-        session.query(Category).filter_by(household_id=household_id).count(),
-        household_id,
+        "Seeded {} categories from {}",
+        session.query(Category).count(),
         _TAXONOMY_YAML,
     )
 
 
-def _row_to_category(
-    row: dict[str, Any], *, parent_id: int | None, household_id: uuid.UUID
-) -> Category:
+def _row_to_category(row: dict[str, Any], *, parent_id: int | None) -> Category:
     return Category(
         key=row["key"],
         name=row["name"],
         parent_id=parent_id,
-        household_id=household_id,
         description=row.get("description"),
         rules=row.get("rules"),
     )

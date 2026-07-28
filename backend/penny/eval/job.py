@@ -38,19 +38,6 @@ from penny.eval.fixture import build_fixture_bytes, snapshot_finance_to_sqlite
 from penny.eval.replay import replay_one
 from penny.eval.report import disagreements, render_eval_report
 from penny.eval.version import version_stamp
-from penny.tenancy.context import RequestContext, cron_principal_from_env
-
-
-def _eval_principals() -> list[RequestContext]:
-    """Individual-mode tenant contexts for the eval's RLS-scoped reads.
-
-    One ``RequestContext`` per cron user (all in the cron household). Unioning
-    each user's individual view yields the household's private + shared finance
-    rows (see ``snapshot_finance_to_sqlite``). Fails loudly if the cron principal
-    env is unset — the eval must never read RLS-unscoped.
-    """
-    household, user_ids = cron_principal_from_env()
-    return [RequestContext(user_id=u, household_id=household) for u in user_ids]
 
 
 def _send_status_email(
@@ -104,7 +91,6 @@ async def run_eval(
     limit: int | None = None,
     email_to: list[str] | None = None,
     cohort_ids: list[int] | None = None,
-    principals: list[RequestContext] | None = None,
 ) -> dict[str, Any]:
     """Run one eval.
 
@@ -112,8 +98,7 @@ async def run_eval(
     advance the watermark. Must be a positive integer.
     ``cohort_ids`` overrides cohort selection with an explicit set (a targeted
     rerun / backtest); in that mode the ingest watermark is left untouched so a
-    one-off run can't skip future daily cohorts. ``principals`` overrides the
-    read-only snapshot's tenant contexts (defaults to the cron principal env).
+    one-off run can't skip future daily cohorts.
     """
     if limit is not None and limit <= 0:
         raise ValueError(f"--limit must be a positive integer, got {limit}")
@@ -129,7 +114,7 @@ async def run_eval(
     # Carries the cohort size + household as soon as they are known, so a failure
     # after cohort selection records a diagnostic size (not a misleading 0) and
     # stamps the household on the failed row.
-    progress: dict[str, Any] = {"cohort_size": 0, "household_id": None}
+    progress: dict[str, Any] = {"cohort_size": 0}
 
     try:
         result = await _run_eval_core(
@@ -137,7 +122,6 @@ async def run_eval(
             run_at,
             limit=limit,
             cohort_ids=cohort_ids,
-            principals=principals,
             progress=progress,
         )
     except Exception as exc:  # noqa: BLE001 - re-raised after alerting
@@ -148,7 +132,6 @@ async def run_eval(
                 run_at=run_at,
                 status="failed",
                 cohort_size=progress["cohort_size"],
-                household_id=progress["household_id"],
             )
         logger.exception("eval: run failed")
         if email_to:
@@ -191,39 +174,19 @@ async def _run_eval_core(
     *,
     limit: int | None,
     cohort_ids: list[int] | None,
-    principals: list[RequestContext] | None,
     progress: dict[str, Any],
 ) -> dict[str, Any]:
     """Do the eval; return the result dict. Emailing is the caller's job."""
     import penny.db as pdb
 
     explicit_cohort = cohort_ids is not None
-
-    # Resolve the eval principals (the cron household's users) up front: they
-    # scope the cohort, its watermark, and the snapshot to the SAME household. On
-    # SQLite dev there are no roles/RLS, so principals stay None and nothing is
-    # scoped (the watermark is then global).
     readonly = pdb.get_readonly_db()
-    if principals is None and readonly.dialect != "sqlite":
-        principals = _eval_principals()
-    household_id = principals[0].household_id if principals else None
-    progress["household_id"] = household_id
-
-    # Cohort membership + watermark come from the read-WRITE role (prod), both
-    # scoped to the eval household: the household-scoped watermark (only this
-    # household's completed runs) resumes exactly where this household's last
-    # cohort ended. That role bypasses RLS, so the household filter (not RLS)
-    # yields the COMPLETE household cohort — every user + visibility — which the
-    # RLS-scoped snapshot below must fully cover (a completeness guard ties the
-    # two together, catching a household member absent from the principals).
-    since = (
-        None if explicit_cohort else prod.last_eval_watermark(household_id=household_id)
-    )
+    since = None if explicit_cohort else prod.last_eval_watermark()
     is_limited = limit is not None and not explicit_cohort
     if explicit_cohort:
         cohort_ids = list(cohort_ids or [])
     else:
-        cohort_ids = prod.derived_ids_created_since(since, household_id=household_id)
+        cohort_ids = prod.derived_ids_created_since(since)
         if is_limited:
             # Most-recent N. A limited run is a non-committing sample (watermark
             # not advanced below), so it never strands the rows it dropped.
@@ -233,7 +196,6 @@ async def _run_eval_core(
             run_at=run_at,
             status="skipped_empty",
             cohort_size=0,
-            household_id=household_id,
         )
         logger.info("eval: empty cohort; skipped")
         return {"status": "skipped_empty", "cohort_size": 0, "disagreements": 0}
@@ -248,13 +210,10 @@ async def _run_eval_core(
     )
     run_label = f"eval-{run_at:%Y%m%dT%H%M%S}"
 
-    # Build a writable SQLite snapshot of the finance closure through the read-only
-    # role. On Postgres it is RLS-scoped, so union across the household's
-    # principals (individual mode); SQLite dev needs no principals.
+    # Build a writable SQLite snapshot of the finance closure through the
+    # read-only handle.
     with tempfile.TemporaryDirectory() as tmp:
-        snapshot = snapshot_finance_to_sqlite(
-            readonly, principals, Path(tmp) / "fixture.sqlite"
-        )
+        snapshot = snapshot_finance_to_sqlite(readonly, Path(tmp) / "fixture.sqlite")
 
         with snapshot.session() as session:
             rows = session.execute(
@@ -341,7 +300,6 @@ async def _run_eval_core(
             status="completed",
             cohort_size=len(cohort_ids),
             cohort_max_created_at=watermark,
-            household_id=household_id,
             branch_name=run_label,
             version=version,
             items=items,

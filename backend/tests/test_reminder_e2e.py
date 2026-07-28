@@ -36,8 +36,7 @@ from agent_harness.core.models import (
 from agent_harness.sessions.inmemory import InMemorySession
 
 from penny.api.persistence.reminders import DbReminderQueue
-from tests.conftest import TEST_HOUSEHOLD_ID, TEST_USER_ID
-from tests.test_onboarding import _ctx
+from tests.test_onboarding import _setup
 
 
 class _FakeModel:
@@ -80,9 +79,9 @@ class _FakeModel:
 
 
 async def test_enqueued_reminder_reaches_the_llm_turn(isolated_db):
-    ctx = _ctx()
+    _setup()
     conv = "conv-e2e"
-    queue = DbReminderQueue(ctx)
+    queue = DbReminderQueue()
     await queue.enqueue(conv, "onboarding", "connect a bank")
 
     session = InMemorySession(session_id=conv)
@@ -118,20 +117,18 @@ async def test_stored_conversation_never_contains_reminder_text(isolated_db):
     """
     from penny.api.persistence.engine import create_web_schema
     from penny.api.persistence.store import ConversationStore
-    from penny.tenancy.context import RequestContext
 
     create_web_schema()
-    ctx = RequestContext(user_id=TEST_USER_ID, household_id=TEST_HOUSEHOLD_ID)
     conv = "conv-store"
     client_text = "how much did I spend on dining?"
 
-    await DbReminderQueue(ctx).enqueue(conv, "onboarding", "connect a bank")
+    await DbReminderQueue().enqueue(conv, "onboarding", "connect a bank")
 
     store = ConversationStore()
-    store.ensure_conversation(conv, ctx)
-    store.append_user_message(conv, ctx, ai_sdk_message_id="u1", text=client_text)
+    store.ensure_conversation(conv)
+    store.append_user_message(conv, ai_sdk_message_id="u1", text=client_text)
 
-    rows = store.get_conversation_messages(conv, ctx)
+    rows = store.get_conversation_messages(conv)
     user_rows = [r for r in rows if r.role == "user"]
     assert len(user_rows) == 1
     stored_text = "".join(
@@ -140,4 +137,4 @@ async def test_stored_conversation_never_contains_reminder_text(isolated_db):
     assert stored_text == client_text
     assert "<system-reminder" not in stored_text
     # The reminder still lives in the queue — never in the transcript.
-    assert [r.kind for r in await DbReminderQueue(ctx).drain(conv)] == ["onboarding"]
+    assert [r.kind for r in await DbReminderQueue().drain(conv)] == ["onboarding"]

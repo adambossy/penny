@@ -38,20 +38,11 @@ dependencies = [
     # Sentry error tracking (penny.observability.sentry). Auto-instruments the
     # FastAPI app + Typer/cron entrypoints for unhandled-exception reporting.
     "sentry-sdk>=2.0",
-    # Modal Sandboxes: the per-conversation runtime for the sandboxed agent loop.
-    "modal>=1.5.1",
-    # MCP server SDK: the tool server that exposes penny toolsets to the
-    # sandboxed agent over streamable-HTTP MCP (agent-harness ships only the
-    # MCP *client*; the server side is ours).
+    # MCP server SDK: `penny mcp` exposes the toolsets to harnesses (Claude
+    # Code etc.) over stdio (agent-harness ships only the MCP *client*; the
+    # server side is ours).
     "mcp>=1.0",
-    # Shared backend↔sandbox wire protocol (lib/protocol): the envelope codec
-    # the relay decodes and the TurnPayload the dispatcher encodes.
-    "penny-lib",
 ]
-
-[tool.uv.sources]
-penny-lib = { workspace = true }
-penny-sandbox = { workspace = true }
 
 [project.scripts]
 penny = "penny.cli:main"
@@ -78,16 +69,9 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.7",
-    # Dev-only: tests/test_relay.py drives the real sandbox runner in-process.
-    # Never a runtime dep — prod images sync --no-dev, so the runner stays out
-    # of the backend venv and the website→runner boundary holds by packaging.
-    "penny-sandbox",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
-markers = [
-    "postgres: requires a Postgres database (set POSTGRES_TEST_URL); skipped otherwise",
-]

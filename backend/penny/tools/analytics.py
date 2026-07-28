@@ -28,7 +28,6 @@ from sqlalchemy import text
 
 from penny.db import get_readonly_db
 from penny.security import SqlGuardError, assert_read_only_select
-from penny.tenancy.context import require_request_context
 from penny.tools._services.chart import GenerateChartTool
 
 
@@ -79,10 +78,9 @@ async def run_sql(query: str) -> dict[str, Any]:
 
     def _run() -> dict[str, Any]:
         try:
-            # session_for pins the tenant GUCs so RLS scopes the read; the
-            # read-only role blocks any DML at the database level.
-            ctx = require_request_context()
-            with get_readonly_db().session_for(ctx) as session:
+            # The optional read-only role blocks any DML at the database level;
+            # the parse guard above is the always-on fence.
+            with get_readonly_db().session() as session:
                 result = session.execute(text(query))
                 if result.returns_rows:
                     rows = [_serialize_row(row) for row in result.fetchall()]

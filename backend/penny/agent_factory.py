@@ -30,7 +30,6 @@ from .config import agent_model
 from .plugins.amazon import build_amazon_toolset
 from .prompts import load_prompt
 from .sandbox import get_sandbox
-from .tenancy.context import RequestContext
 from .tools._services.onboarding import OnboardingResolver
 from .tools.registry import build_toolset
 
@@ -70,9 +69,7 @@ def _assemble_agent_memory(workspace_dir: Path | None = None) -> str:
     return "\n\n".join(parts)
 
 
-def _render_system_prompt(
-    ctx: RequestContext, workspace_dir: Path | None = None
-) -> str:
+def _render_system_prompt(workspace_dir: Path | None = None) -> str:
     """Render the penny-system-prompt prompt with full runtime context.
 
     Fills: today's date + ISO week, DB dialect + dialect directives, schema
@@ -180,23 +177,16 @@ def build_agent(
     model: GeminiModel,
     session: InMemorySession,
     persist_session: bool = True,
-    ctx: RequestContext,
     workspace_dir: Path | None = None,
     usage_pricer: UsagePricer | None = None,
     reminders: ReminderQueue | None = None,
     onboarding_resolver: OnboardingResolver | None = None,
 ) -> Agent:
-    """Build the per-request Agent, scoped to the requesting principal.
+    """Build the per-request Agent.
 
-    ``ctx`` is required: the agent's tools hit the finance DB, and every DB
-    session is tenant-scoped by the RequestContext (front doors set the
-    ContextVar; this keyword makes the dependency explicit and threads the
-    principal into prompt rendering).
-
-    ``workspace_dir`` (phase 1b) roots the agent's filesystem sandbox at the
-    per-run hybrid checkout so its memory/reports edits land where flush picks
-    them up. Without it, the process-wide legacy ``~/.transactoid`` sandbox is
-    used (scripts/tests with no checkout).
+    ``workspace_dir`` overrides the agent's filesystem-sandbox root (e.g. the
+    eval replays against a snapshot dir). Without it, the process-wide local
+    workspace sandbox is used.
     """
     sandbox = (
         InProcessSandbox(root=str(workspace_dir))
@@ -215,7 +205,7 @@ def build_agent(
     return Agent(
         name="penny",
         model=model,
-        instructions=_render_system_prompt(ctx, workspace_dir),
+        instructions=_render_system_prompt(workspace_dir),
         session=session,
         persist_session=persist_session,
         sandbox=sandbox,

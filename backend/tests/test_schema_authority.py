@@ -5,6 +5,8 @@ See docs/superpowers/plans/2026-07-09-alembic-sole-authority-on-postgres.md.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 from sqlalchemy import create_engine, inspect
 
@@ -18,8 +20,8 @@ def test_upgrade_to_head_builds_full_schema(tmp_path):
 
     insp = inspect(create_engine(url))
     tables = insp.get_table_names()
-    assert "households" in tables
-    assert "household_id" in {c["name"] for c in insp.get_columns("categories")}
+    assert "plaid_transactions" in tables
+    assert "categories" in tables
 
     # Idempotent: a second run is a no-op, not an error.
     upgrade_to_head(url)
@@ -35,7 +37,7 @@ def test_explicit_url_wins_over_env_database_url(tmp_path, monkeypatch):
     upgrade_to_head(target)
 
     # The explicit target got the schema; the env-named DB was never touched.
-    assert "households" in inspect(create_engine(target)).get_table_names()
+    assert "categories" in inspect(create_engine(target)).get_table_names()
     assert not (tmp_path / "poison.db").exists()
 
 
@@ -46,17 +48,24 @@ def test_create_schema_refuses_postgres():
         db.create_schema()
 
 
+class _FakeDB:
+    def __init__(self, dialect: str, calls: list[str]) -> None:
+        self.dialect = dialect
+        self._calls = calls
+
+    def create_schema(self) -> None:
+        self._calls.append("finance")
+
+    @contextmanager
+    def session(self):
+        yield None
+
+
 def test_bootstrap_skips_create_all_on_postgres(monkeypatch):
     calls: list[str] = []
 
-    class FakeDB:
-        dialect = "postgresql"
-
-        def create_schema(self) -> None:
-            calls.append("create")
-
-    monkeypatch.setattr("penny.bootstrap.get_db", lambda: FakeDB())
-    monkeypatch.setattr("penny.bootstrap._seed_dev_household", lambda: None)
+    monkeypatch.setattr("penny.bootstrap.get_db", lambda: _FakeDB("postgresql", calls))
+    monkeypatch.setattr("penny.bootstrap.seed_taxonomy", lambda session: None)
 
     from penny.bootstrap import bootstrap
 
@@ -67,17 +76,8 @@ def test_bootstrap_skips_create_all_on_postgres(monkeypatch):
 def test_bootstrap_creates_all_on_sqlite(monkeypatch):
     calls: list[str] = []
 
-    class FakeDB:
-        dialect = "sqlite"
-        # Empty in-memory engine: the pre-tenancy fail-fast check
-        # (_ensure_tenant_schema) inspects it and passes a fresh database.
-        _engine = create_engine("sqlite://")
-
-        def create_schema(self) -> None:
-            calls.append("finance")
-
-    monkeypatch.setattr("penny.bootstrap.get_db", lambda: FakeDB())
-    monkeypatch.setattr("penny.bootstrap._seed_dev_household", lambda: None)
+    monkeypatch.setattr("penny.bootstrap.get_db", lambda: _FakeDB("sqlite", calls))
+    monkeypatch.setattr("penny.bootstrap.seed_taxonomy", lambda session: None)
     monkeypatch.setattr(
         "penny.api.persistence.engine.create_web_schema",
         lambda: calls.append("web"),
