@@ -59,24 +59,31 @@ def _run_job(state: dict[str, Any], name: str, argv: list[str]) -> None:
 
 
 def _due_sync(state: dict[str, Any], now: datetime, interval_hours: int) -> bool:
-    last = state.get("sync", {}).get("last_run_at")
+    job = state.get("sync", {})
+    last = job.get("last_run_at")
     if last is None:
         return True
+    if not job.get("ok", True):
+        return True  # a failed run retries on the next tick, not next interval
     return (now - datetime.fromisoformat(last)).total_seconds() >= interval_hours * 3600
 
 
 def _due_report(state: dict[str, Any], now_local: datetime, schedule: dict) -> bool:
-    """True in the configured weekly slot, at most once per slot.
+    """True in the configured weekly slot, at most one SUCCESS per slot.
 
     The slot is (weekday, hour) local time; "once" is enforced by comparing
-    the last report run's date to today's.
+    the last successful run's date to today's. A failed send retries on the
+    next tick while the slot is still open.
     """
     if now_local.isoweekday() != schedule["report_weekday"]:
         return False
     if now_local.hour < schedule["report_hour"]:
         return False
-    last = state.get("report", {}).get("last_run_at")
+    job = state.get("report", {})
+    last = job.get("last_run_at")
     if last is None:
+        return True
+    if not job.get("ok", True):
         return True
     return datetime.fromisoformat(last).astimezone().date() < now_local.date()
 
