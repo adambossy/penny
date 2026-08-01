@@ -385,7 +385,7 @@ class SyncTool:
                     total_added=0, total_modified=0, total_removed=0, items_synced=0
                 )
 
-            plaid_items = self._db.list_plaid_items_for_context()
+            plaid_items = self._db.list_plaid_items()
             if not plaid_items:
                 return SyncSummary(
                     total_added=0, total_modified=0, total_removed=0, items_synced=0
