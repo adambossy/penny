@@ -1,7 +1,6 @@
-import { StrictMode } from "react";
+import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
-import { Gallery } from "@penny/ui";
 import { registerToolRenderer } from "@adambossy/agent-ui";
 import { ChatRoute, CONVERSATION_PATH, PlaidLinkCard, PlaidOauthGate } from "@penny/chat-ui";
 import { AppShell } from "./AppShell";
@@ -33,13 +32,29 @@ function AppRoutes() {
   );
 }
 
+// Dev-only design-system preview, lazily loaded through its own subpath entry
+// (not the package index — that's statically imported by AppShell, which would
+// pin Gallery into the main chunk) so it code-splits out of production builds.
+const Gallery = lazy(() =>
+  import("@penny/ui/gallery").then((m) => ({ default: m.Gallery })),
+);
+
 function Root() {
   return (
     <Routes>
       {/* Dev-only design-system preview: `/ui` renders the @penny/ui Gallery.
           The route is only registered in dev builds (import.meta.env.DEV), so it
           never exists in production. */}
-      {import.meta.env.DEV && <Route path="/ui/*" element={<Gallery />} />}
+      {import.meta.env.DEV && (
+        <Route
+          path="/ui/*"
+          element={
+            <Suspense fallback={null}>
+              <Gallery />
+            </Suspense>
+          }
+        />
+      )}
       <Route
         path="*"
         element={

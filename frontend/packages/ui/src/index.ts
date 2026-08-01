@@ -32,4 +32,3 @@ export { Header } from "./shell/Header";
 export type { HeaderProps } from "./shell/Header";
 export { Footer } from "./shell/Footer";
 export type { FooterProps } from "./shell/Footer";
-export { Gallery } from "./Gallery";
