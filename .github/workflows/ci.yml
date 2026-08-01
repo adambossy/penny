@@ -1,7 +1,11 @@
-# Standing regression gate (stood up in phase 1a, the first phase that touches
-# RLS; later phases append suites, phase 6 hardens with policy-lint/dep-scan/
-# drift checks). Mark the `test` job a required status check on main so no
-# phase can silently regress an isolation guarantee.
+# Standing regression gate for the single-player core: the backend suite
+# (ruff + pytest on SQLite), the frontend build, and the Playwright E2E
+# harness. Mark the `test` job a required status check on main.
+#
+# The tenancy-era steps (sandbox/lib member suites, the sandbox dependency
+# denylist, the Postgres RLS isolation suites) left with the multi-tenant
+# split — the hosted product's gates live with penny-web / the
+# legacy/saas-monolith freeze.
 name: CI
 
 on:
@@ -17,20 +21,6 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: penny_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -56,50 +46,6 @@ jobs:
         working-directory: backend
         run: uv run pytest -q
 
-      # The uv workspace installs penny-lib (protocol) as a backend runtime dep
-      # and penny-sandbox (runner) as a dev dep, so the relay/resume integration
-      # tests already ran in the backend suite above. The sandbox and lib
-      # members' own unit suites run here from their directories (each member's
-      # pyproject supplies its pytest config); --no-sync reuses the workspace
-      # venv the backend sync built instead of re-pruning it per member.
-      - name: Sandbox unit tests (runner + codec wire path)
-        working-directory: sandbox
-        run: uv run --no-sync pytest -q
-
-      - name: Lib unit tests (protocol codec)
-        working-directory: lib
-        run: uv run --no-sync pytest -q
-
-      # The sandbox image must stay thin: no finance stack in its resolved
-      # closure (tools run on Fly over MCP). The workspace lock covers all
-      # members, so check the sandbox member's own exported closure.
-      - name: Sandbox dependency denylist (no finance stack)
-        run: |
-          uv export --frozen --package penny-sandbox --no-dev --no-hashes > /tmp/sandbox-closure.txt
-          if grep -iE '^(sqlalchemy|plaid|boto3|psycopg)' /tmp/sandbox-closure.txt; then
-            echo "::error::finance-stack package leaked into the sandbox closure"
-            exit 1
-          fi
-
-      # RLS is bypassed by superusers, so the isolation suites must run as a
-      # dedicated NON-superuser role (mirrors Neon's neondb_owner).
-      - name: Create non-superuser RLS role
-        run: |
-          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d penny_ci -c \
-            "CREATE ROLE penny_rls LOGIN PASSWORD 'penny_rls' NOSUPERUSER;"
-          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d penny_ci -c \
-            "GRANT ALL ON DATABASE penny_ci TO penny_rls; GRANT CREATE ON SCHEMA public TO penny_rls;"
-
-      - name: Multi-tenant isolation suites (Postgres RLS)
-        working-directory: backend
-        env:
-          POSTGRES_TEST_URL: postgresql://penny_rls:penny_rls@127.0.0.1:5432/penny_ci
-          # Superuser URL: the fresh-Postgres migration/drift test creates and
-          # drops a throwaway database (the chain hardcodes the web/public
-          # schemas, so a per-test schema can't isolate the web migrations).
-          POSTGRES_SUPERUSER_URL: postgresql://postgres:postgres@127.0.0.1:5432/penny_ci
-        run: uv run pytest -q -m postgres
-
       - name: Setup node
         uses: actions/setup-node@v4
         with:
@@ -111,13 +57,17 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Frontend build
+        working-directory: frontend
+        run: npm run build
+
       - name: Install Playwright chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium
 
-      # Boots the real backend (dev principal, throwaway SQLite) + vite and
-      # drives headless chromium. The chat-smoke spec self-skips unless
-      # PENNY_E2E_MODEL (+ a model key) is provided.
+      # Boots the real backend (throwaway SQLite) + vite and drives headless
+      # chromium. The chat-smoke spec self-skips unless PENNY_E2E_MODEL (+ a
+      # model key) is provided.
       - name: Playwright E2E
         working-directory: frontend
         run: npx playwright test
