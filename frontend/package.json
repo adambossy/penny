@@ -13,7 +13,7 @@
     "e2e": "playwright test"
   },
   "dependencies": {
-    "@adambossy/agent-ui": "^0.2.0",
+    "@adambossy/agent-ui": "^0.5.0",
     "@ai-sdk/react": "^3.0.193",
     "@clerk/react": "^6.11.3",
     "@penny/ui": "*",
