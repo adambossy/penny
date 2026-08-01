@@ -102,6 +102,9 @@ P15. Local web app, no accounts
     sign-in, no landing page. Remote access (e.g. from a phone) is the
     user's network choice: Tailscale is the documented path; a bare ngrok
     URL is warned against. Penny ships no auth layer of its own.
+    The build stamps the dist (penny-build.json) and serve refuses an
+    unstamped one (a stale pre-split or foreign build is never served —
+    tests/test_serve_build_stamp.py).
 
 P16. Claude Code plugin (dual surface)
     The same agent is exposed to MCP harnesses via `penny mcp` (stdio):

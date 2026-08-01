@@ -21,8 +21,33 @@ const AGENT_UI_SRC = path.resolve(
 const usePublished =
   process.env.AGENT_UI_USE_PUBLISHED === "1" || !fs.existsSync(AGENT_UI_SRC);
 
+// Stamp the build so `penny serve` can tell a dist built by this app from a
+// stale or foreign one (the incident: a gitignored pre-split dist — Clerk
+// landing page and all — survived the single-player merge and was served
+// happily). serve refuses a dist without the stamp; see penny/cli.py.
+function buildStamp() {
+  let outDir = "";
+  return {
+    name: "penny-build-stamp",
+    apply: "build" as const,
+    configResolved(config: { root: string; build: { outDir: string } }) {
+      outDir = path.resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      fs.writeFileSync(
+        path.join(outDir, "penny-build.json"),
+        JSON.stringify(
+          { app: "penny-single-player", builtAt: new Date().toISOString() },
+          null,
+          2,
+        ) + "\n",
+      );
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), buildStamp()],
   resolve: {
     // Force a single React instance. Without this, source-aliasing
     // agent-ui makes its sibling `node_modules/react` resolve as a

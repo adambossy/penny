@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -462,6 +463,23 @@ def daemon_status() -> None:
     typer.echo(_json.dumps(state, indent=2))
 
 
+def _frontend_dist_ok(dist: Path) -> bool:
+    """True when ``dist`` carries this app's build stamp.
+
+    ``npm run build`` writes ``penny-build.json`` (vite.config.ts) into the
+    dist; a directory without it is a stale (pre-split) or foreign build —
+    the incident this guards against served a gitignored pre-split dist,
+    Clerk landing page and all, against the no-auth backend.
+    """
+    import json
+
+    try:
+        stamp = json.loads((dist / "penny-build.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(stamp, dict) and stamp.get("app") == "penny-single-player"
+
+
 @app.command("serve")
 def serve(
     host: str = typer.Option(
@@ -491,8 +509,6 @@ def serve(
     frontend when available — without it, the API alone runs (use the Vite
     dev server against it for development).
     """
-    from pathlib import Path
-
     import uvicorn
 
     from penny.api.app import AppConfig, create_app
@@ -503,18 +519,35 @@ def serve(
     static: Path | None = None
     if frontend_dir is not None:
         static = Path(frontend_dir).expanduser()
+        if not static.exists():
+            typer.echo(f"Frontend dir not found: {static}", err=True)
+            raise typer.Exit(1)
+        if not _frontend_dist_ok(static):
+            # An explicit path the user chose gets a hard error, not a silent
+            # downgrade — they asked for exactly this dist.
+            typer.echo(
+                f"{static} has no penny-build.json stamp — it was not built "
+                "by this app's `npm run build` (a stale pre-split or foreign "
+                "build). Rebuild it, or pass a freshly built dist.",
+                err=True,
+            )
+            raise typer.Exit(1)
     else:
         candidate = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
-        if candidate.exists():
+        if candidate.exists() and _frontend_dist_ok(candidate):
             static = candidate
-    if static is not None and not static.exists():
-        typer.echo(f"Frontend dir not found: {static}", err=True)
-        raise typer.Exit(1)
-    if static is None:
-        typer.echo(
-            "No built frontend found — serving the API only. "
-            "Build it with `npm run build` in frontend/."
-        )
+        elif candidate.exists():
+            typer.echo(
+                f"Ignoring {candidate}: no penny-build.json stamp — a stale "
+                "(pre-split) or foreign build. Rebuild with `npm run build` "
+                "in frontend/. Serving the API only.",
+                err=True,
+            )
+        else:
+            typer.echo(
+                "No built frontend found — serving the API only. "
+                "Build it with `npm run build` in frontend/."
+            )
 
     if all_in_one:
         import threading
