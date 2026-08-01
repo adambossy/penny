@@ -12,11 +12,13 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
+from agent_harness.extras.reminders import ReminderQueue
 from agent_harness.sessions.inmemory import InMemorySession
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
+from .app import TurnWiring
 from .bridge import _sse, stream_and_persist
 from .hydration import conversation_to_ui
 from .persistence.rehydrate import parts_to_messages
@@ -80,7 +82,9 @@ def _extract_prompt(body: dict[str, Any]) -> str:
     return ""
 
 
-async def _maybe_enqueue_onboarding(conversation_id: str, reminders: Any) -> None:
+async def _maybe_enqueue_onboarding(
+    conversation_id: str, reminders: ReminderQueue | None
+) -> None:
     """Enqueue the consolidated onboarding reminder for this turn.
 
     Called before ``agent.run`` so the harness flush picks the reminder up this
@@ -95,7 +99,7 @@ async def _maybe_enqueue_onboarding(conversation_id: str, reminders: Any) -> Non
         await reminders.enqueue(conversation_id, "onboarding", content)
 
 
-def build_router(*, turn_wiring: Any) -> APIRouter:
+def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
     """The chat API router, with turns provisioned by ``turn_wiring``."""
     router = APIRouter(prefix=API_PREFIX)
     store = ConversationStore()

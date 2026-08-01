@@ -47,12 +47,13 @@ async def sync_transactions(count: int = 250) -> dict[str, Any]:
 
 @tool
 async def sync_status() -> dict[str, Any]:
-    """Report how fresh the local data is and whether the daemon is running.
+    """Report how fresh the local data is, from the daemon's own records.
 
     Reads the daemon's state file (last sync/report runs + outcomes) and the
-    newest transaction timestamp. Use before analysis when data freshness
-    matters; if the daemon is not running, suggest the user start it with
-    ``penny daemon start``.
+    newest transaction timestamp — file evidence, not the service manager, so
+    the tool works identically from the web app and the MCP surface. Use
+    before analysis when data freshness matters; when the state is missing or
+    the last sync is stale, suggest the user run ``penny daemon start``.
     """
     import asyncio
     from datetime import UTC, datetime
