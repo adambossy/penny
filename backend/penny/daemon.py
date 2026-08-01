@@ -17,39 +17,17 @@ macOS, systemd user unit on Linux) — see ``penny.service_install``.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-import json
-from pathlib import Path
 import subprocess
-import sys
 import time
 from typing import Any
 
 from loguru import logger
 
+from penny.daemon_state import read_state, write_state
+from penny.service_install import penny_argv
 from penny.settings import load_schedule
-from penny.workspace import resolve_logs_dir
 
 _TICK_SECONDS = 60.0
-
-
-def state_path() -> Path:
-    return resolve_logs_dir() / "daemon-state.json"
-
-
-def read_state() -> dict[str, Any]:
-    path = state_path()
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _write_state(state: dict[str, Any]) -> None:
-    path = state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
 
 
 def _run_job(state: dict[str, Any], name: str, argv: list[str]) -> None:
@@ -62,7 +40,7 @@ def _run_job(state: dict[str, Any], name: str, argv: list[str]) -> None:
     logger.info("daemon: starting job {}", name)
     try:
         proc = subprocess.run(  # noqa: S603 - argv is our own CLI
-            [sys.executable, "-m", "penny.cli", *argv],
+            [*penny_argv(), *argv],
             capture_output=True,
             text=True,
             timeout=7200,
@@ -76,7 +54,7 @@ def _run_job(state: dict[str, Any], name: str, argv: list[str]) -> None:
         "ok": ok,
         "detail": detail.strip(),
     }
-    _write_state(state)
+    write_state(state)
     logger.info("daemon: job {} finished ok={}", name, ok)
 
 
@@ -117,7 +95,6 @@ def run_daemon() -> None:
         now = datetime.now(UTC)
         if _due_sync(state, now, schedule["sync_interval_hours"]):
             _run_job(state, "sync", ["sync"])
-        state = read_state()
         if _due_report(state, datetime.now().astimezone(), schedule):
             _run_job(state, "report", ["run-scheduled-report"])
         time.sleep(_TICK_SECONDS)

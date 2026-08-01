@@ -1,7 +1,8 @@
 """Deterministic progressive-onboarding engine (website/app domain).
 
-Onboarding is website/app state (decision D1/D5): the items live in the ``web``
-schema and this module owns the state machine + per-turn trigger evaluation. The
+Onboarding is website/app state (decision D1/D5): the items live in the app
+store (``app_*`` tables) and this module owns the state machine + per-turn
+trigger evaluation. The
 website chat handler calls :func:`ensure_items` + :func:`evaluate` each turn and
 enqueues the returned consolidated reminder; the agent's
 ``resolve_onboarding_item`` tool calls :func:`resolve` on explicit accept/decline.
@@ -23,6 +24,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from . import app_session
 from .models import OnboardingItem
 
 # The v1 onboarding steps, in the fixed order they appear in a consolidated
@@ -121,6 +123,26 @@ def evaluate(session: Session, signals: TurnSignals) -> str | None:
     return _render(fired)
 
 
+def evaluate_turn(conversation_id: str) -> str | None:
+    """One sync call per chat turn: gather signals, seed items, evaluate.
+
+    Owns the deterministic signal-gathering (today just "any Plaid item
+    linked?"; the response/correction signals are v1 placeholders) so every
+    surface gets the same reminder for the same state.
+    """
+    from penny.db import get_db
+
+    signals = TurnSignals(
+        has_linked_items=get_db().has_plaid_items(),
+        response_had_categorized_rows=False,
+        user_corrected_category=False,
+        conversation_id=conversation_id,
+    )
+    with app_session() as s:
+        ensure_items(s)
+        return evaluate(s, signals)
+
+
 def resolve(item_key: str, action: str) -> dict[str, str]:
     """Set an item's status to ``accepted``/``dismissed``.
 
@@ -129,13 +151,11 @@ def resolve(item_key: str, action: str) -> dict[str, str]:
     Everything stays revisitable: a dismissed item is never nudged again, but the
     user can still ask and the agent performs the underlying action directly.
     """
-    from .reminders import _web_session
-
     if item_key not in ITEM_KEYS:
         return {"error": f"unknown item_key {item_key!r}"}
     if action not in _VALID_ACTIONS:
         return {"error": f"action must be one of {_VALID_ACTIONS}, got {action!r}"}
-    with _web_session() as s:
+    with app_session() as s:
         item = (
             s.query(OnboardingItem)
             .filter(OnboardingItem.item_key == item_key)

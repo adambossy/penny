@@ -15,13 +15,8 @@ bump ``_ACTIVE_VERSION`` to 2, and keep ``PENNY_PLAID_TOKEN_KEY`` set so existin
 ``v1:`` ciphertext still decrypts. Removing a version's key only after all its
 ciphertext has been re-encrypted forward is the (optional) final rotation step.
 
-The plaintext is decrypted only at the outbound call site (the Plaid API, or the
-outbound-LLM provider client for a BYO credential); it must never appear in logs,
-prompts, or the browser.
-
-``encrypt_token``/``decrypt_token`` are the original Plaid-token surface;
-``encrypt_secret``/``decrypt_secret`` (phase 2b) are the generic aliases the
-billing credential vault uses. Both share the same versioned envelope and key set.
+The plaintext is decrypted only at the outbound call site (the Plaid API); it
+must never appear in logs, prompts, or the browser.
 """
 
 from __future__ import annotations
@@ -70,8 +65,8 @@ def _fernet_for_version(version: int) -> Fernet:
 def encrypt_token(plaintext: str) -> str:
     """Encrypt with the active version's key, stamped ``v<N>:``."""
     if _key_env_for_version(_ACTIVE_VERSION) is None:
-        # Fail closed rather than silently store plaintext (the storage sites add
-        # the clerk-mode guard). Historical message/type preserved for callers.
+        # Fail closed rather than silently store plaintext. Historical
+        # message/type preserved for callers.
         raise RuntimeError("PENNY_PLAID_TOKEN_KEY is not set")
     ciphertext = (
         _fernet_for_version(_ACTIVE_VERSION).encrypt(plaintext.encode()).decode()
@@ -104,16 +99,6 @@ def encrypt_token_at_rest(plaintext: str) -> str:
     if _key_env_for_version(_ACTIVE_VERSION) is not None:
         return encrypt_token(plaintext)
     return plaintext
-
-
-def encrypt_secret(plaintext: str) -> str:
-    """Encrypt an arbitrary secret at rest — generic alias of ``encrypt_token``."""
-    return encrypt_token(plaintext)
-
-
-def decrypt_secret(ciphertext: str) -> str:
-    """Decrypt a secret written by ``encrypt_secret`` — alias of ``decrypt_token``."""
-    return decrypt_token(ciphertext)
 
 
 def is_encrypted(value: str) -> bool:

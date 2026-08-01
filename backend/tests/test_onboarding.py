@@ -7,9 +7,9 @@ Onboarding items are app state on the shared single-player database, so
 
 from __future__ import annotations
 
+from penny.api.persistence import app_session
 from penny.api.persistence.models import OnboardingItem
 from penny.api.persistence.onboarding import TurnSignals, ensure_items, evaluate
-from penny.api.persistence.reminders import _web_session
 from penny.db import get_db
 
 
@@ -30,13 +30,13 @@ def _signals(**kw) -> TurnSignals:
 
 def test_connect_plaid_fires_every_turn_until_resolved(isolated_db):
     _setup()
-    with _web_session() as s:
+    with app_session() as s:
         ensure_items(s)
         first = evaluate(s, _signals())
         second = evaluate(s, _signals())
     assert first and "connect_plaid" in first
     assert second and "connect_plaid" in second  # every turn, deterministic
-    with _web_session() as s:  # dismiss -> silence
+    with app_session() as s:  # dismiss -> silence
         s.query(OnboardingItem).filter_by(item_key="connect_plaid").update(
             {"status": "dismissed"}
         )
@@ -45,7 +45,7 @@ def test_connect_plaid_fires_every_turn_until_resolved(isolated_db):
 
 def test_custom_taxonomy_fires_after_three_categorized_turns(isolated_db):
     _setup()
-    with _web_session() as s:
+    with app_session() as s:
         ensure_items(s)
         s.query(OnboardingItem).filter_by(item_key="connect_plaid").update(
             {"status": "accepted"}
@@ -59,10 +59,10 @@ def test_custom_taxonomy_fires_after_three_categorized_turns(isolated_db):
 
 def test_same_state_same_output(isolated_db):
     _setup()
-    with _web_session() as s:
+    with app_session() as s:
         ensure_items(s)
         a = evaluate(s, _signals())
-    with _web_session() as s:
+    with app_session() as s:
         b = evaluate(s, _signals())
     # deterministic template: the text before the first item key is identical
     assert a.split("connect_plaid")[0] == b.split("connect_plaid")[0]
