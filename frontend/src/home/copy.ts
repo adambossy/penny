@@ -18,6 +18,7 @@ const nav = [
   { label: "Budget", href: "#budget" },
   { label: "Forecast", href: "#forecast" },
   { label: "Drift", href: "#trends" },
+  { label: "Goal", href: "#optimize" },
 ] as const;
 
 export interface Entry {
@@ -73,7 +74,9 @@ export const home = {
       line: "Spending surge",
       title: "Your average is hiding three months.",
       body: "Penny walks a full year, finds the months that broke your own pattern, then splits each one into the merchants and the one-off events behind it — so a trip you took once stops reading as a habit you've formed.",
-      delta: { value: "+$6,730", note: "Three months over baseline — all of it one-off" },
+      // U+2011 non-breaking hyphen: the gutter is only 10rem wide and a plain
+      // hyphen breaks "one-off" across lines, orphaning "off" on its own line.
+      delta: { value: "+$6,730", note: "Three months over baseline — all of it one‑off" },
       ask: "Find my spending surges and explain them",
     },
     {
