@@ -93,9 +93,9 @@ async def exchange_public_token(
     a ``plaid_link`` reminder so the next turn relays the success. Returns
     ``{item_id, accounts}``.
 
-    ``queue`` is injected by the website runtime (the concrete web-backed
-    ``DbReminderQueue`` lives in the website persistence package) — the agent
-    domain never imports it, keeping agent/website segregation intact.
+    ``queue`` is injected by the app runtime (the concrete ``DbReminderQueue``
+    lives in the app persistence package) — the agent domain never imports it,
+    keeping agent/app segregation intact.
     """
     client = client or PlaidClient.from_env()
     exch = await asyncio.to_thread(client.item_public_token_exchange, public_token)

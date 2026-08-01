@@ -2,40 +2,19 @@
 
 The agent and the finance domain: syncing bank transactions, resolving who
 they were with, categorizing them, and answering questions about them — for
-households of one or more users.
+a single user on their own machine. No accounts, no tenants: the user's
+machine and database are the boundary. (The multi-tenant vocabulary —
+household, invite, principal, visibility — lives on in the hosted product's
+penny-web repo and the `legacy/saas-monolith` freeze, not here.)
 
 ## Language
 
-### Tenancy
-
-**Household**:
-The tenancy unit — an isolated group of one or more users whose finances are
-managed together. Every financial row belongs to exactly one household, and
-one individual belongs to exactly one household.
+### Identity
 
 **User**:
-A member of a household. Every financial row has exactly one owning user.
-_Avoid_: account (that's a bank account), member (as an entity name)
-
-**Pending user**:
-An invited person who has not yet signed up; they exist in the inviter's
-household and are claimed atomically at first login.
-
-**Invite**:
-An offer to a new, accountless person to join the inviter's household. An
-email with an active account can never be invited.
-
-**Principal**:
-The identity a request acts as — a (household, user) pair resolved from
-authentication.
-
-**Joint session**:
-A session acting for the household as a whole rather than one member; it sees
-shared data only and can own nothing.
-
-**Visibility**:
-Which household members may see a financial row: `private` (owner only) or
-`shared` (the whole household).
+The one person this installation serves. A stable local user UUID is minted
+in the workspace (`penny.identity`) for things that need a durable ref (e.g.
+Plaid link tokens). _Avoid_: account (that's a bank account)
 
 ### Money movement
 
@@ -89,8 +68,8 @@ reverses, made by the user or automatically.
 ### Categorization
 
 **Taxonomy**:
-A household's two-level tree of categories used to classify spending; seeded
-at provisioning and independently editable per household.
+The user's two-level tree of categories used to classify spending; seeded at
+bootstrap and editable to match how they think about their money.
 
 **Category**:
 A top-level node of the taxonomy. Unqualified "category" implies the top
@@ -104,7 +83,7 @@ Assigning a category (or subcategory) to each transaction with an LLM against
 the taxonomy; split transactions are categorized per line item.
 
 **Merchant rule**:
-A household-authored rule that pins how a merchant's transactions are
+A user-authored rule that pins how a merchant's transactions are
 categorized, overriding the LLM.
 
 **Deprecated category**:
@@ -134,29 +113,24 @@ Dividing one transaction into several so each part carries its own category
 ### Agent
 
 **Workspace**:
-The persistent store of agent state (memory notes, reports) that carries
-across chat and scheduled runs — one shared arm per household, one private
-arm per user.
+The persistent store of agent state (memory notes, reports, logs, config)
+that carries across chat, scheduled runs, and the MCP surface — `~/.penny`
+(an existing `~/.transactoid` is honored).
 
 **Memory**:
 Durable notes the agent writes to the workspace to carry user context (e.g.
 budget notes) across runs.
 
 **Report**:
-A recurring spending report — daily (rolled up to monthly on the 1st) or
-weekly — produced by the agent and delivered by email.
+The recurring weekly spending report produced by the agent (run by the local
+daemon) and delivered by email over the user's configured SMTP.
 
 **Nudge**:
-An agent-initiated onboarding prompt toward a setup step, appearing only in
-individual conversations, at most once per turn, until the step is accepted
-or dismissed.
+An agent-initiated onboarding prompt toward a setup step, appearing at most
+once per turn, until the step is accepted or dismissed.
 
-### Billing
-
-**Subsidy runway**:
-The small per-user grant of platform-funded model usage, started at first
-Plaid link; once spent, the user must connect their own credentials.
-
-**BYO credential**:
-A user-supplied provider API key or OAuth subscription that bills the user's
-own provider account instead of the platform.
+**Daemon**:
+The one long-lived local scheduler (`penny daemon`), installed as a user
+service, owning all scheduled work: sync every N hours and the weekly
+report. Job state is inspectable via `penny daemon status` and the agent's
+`sync_status` tool.
