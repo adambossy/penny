@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -10,14 +11,15 @@ const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
 
 // Resolve @adambossy/agent-ui to the local source checkout so edits in
 // ~/code/agent-ui hot-reload into Penny. Mirrors the alias the playground
-// uses internally. Set AGENT_UI_USE_PUBLISHED=1 to instead resolve the
-// published package from node_modules (CI / production builds, where the
-// local source checkout doesn't exist).
+// uses internally. When the checkout doesn't exist (CI, other machines) the
+// published package from node_modules is used automatically; set
+// AGENT_UI_USE_PUBLISHED=1 to force it even with a checkout present.
 const AGENT_UI_SRC = path.resolve(
   process.env.AGENT_UI_PATH ?? path.join(os.homedir(), "code/agent-ui/packages/agent-ui"),
   "src",
 );
-const usePublished = process.env.AGENT_UI_USE_PUBLISHED === "1";
+const usePublished =
+  process.env.AGENT_UI_USE_PUBLISHED === "1" || !fs.existsSync(AGENT_UI_SRC);
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
