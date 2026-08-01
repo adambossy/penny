@@ -37,15 +37,13 @@ async def test_exchange_creates_encrypted_item_accounts_and_reminder(
     monkeypatch.setenv("PENNY_PLAID_TOKEN_KEY", Fernet.generate_key().decode())
     _setup()
     db = get_db()
-    with db.session() as s:
-        result = await exchange_public_token(
-            s,
-            public_token="public-x",
-            conversation_id="conv-1",
-            queue=DbReminderQueue(),
-            client=FakePlaidClient(),
-            sync=lambda item_id: None,
-        )
+    result = await exchange_public_token(
+        public_token="public-x",
+        conversation_id="conv-1",
+        queue=DbReminderQueue(),
+        client=FakePlaidClient(),
+        sync=lambda item_id: None,
+    )
     assert result["accounts"] == 2
     with db.session() as s:
         item = s.query(PlaidItem).filter_by(item_id="item-test-1").one()

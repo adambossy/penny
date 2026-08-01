@@ -15,23 +15,12 @@ upserts on ``(conversation_id, kind)`` so only the latest state of a kind flushe
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
-from contextlib import contextmanager
 import uuid
 
 from agent_harness.extras.reminders import Reminder
-from sqlalchemy.orm import Session
 
+from . import app_session
 from .models import QueuedReminder
-
-
-@contextmanager
-def _web_session() -> Iterator[Session]:
-    """A session on the shared single-player engine (app tables live there)."""
-    from penny.db import get_db
-
-    with get_db().session() as session:
-        yield session
 
 
 class DbReminderQueue:
@@ -46,7 +35,7 @@ class DbReminderQueue:
         self, session_id: str, kind: str, content: str, override: bool
     ) -> None:
         stored_kind = kind if override else f"{kind}#{uuid.uuid4().hex[:8]}"
-        with _web_session() as s:
+        with app_session() as s:
             if override:
                 s.query(QueuedReminder).filter_by(
                     conversation_id=session_id,
@@ -64,7 +53,7 @@ class DbReminderQueue:
         return await asyncio.to_thread(self._drain_sync, session_id)
 
     def _drain_sync(self, session_id: str) -> list[Reminder]:
-        with _web_session() as s:
+        with app_session() as s:
             rows = (
                 s.query(QueuedReminder)
                 .filter_by(conversation_id=session_id)

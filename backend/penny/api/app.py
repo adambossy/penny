@@ -18,6 +18,7 @@ Seams:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 import contextlib
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from agent_harness.core.credentials import Credential
+from agent_harness.core.events import InMemoryEventBus
 from agent_harness.core.models import UsagePricer
 from agent_harness.extras.reminders import ReminderQueue
 from fastapi import APIRouter, Depends, FastAPI
@@ -40,7 +42,9 @@ class TurnProvision:
     workspace_dir: Path | None = None  # None → the process-wide local workspace
     reminders: ReminderQueue | None = None
     usage_pricer: UsagePricer | None = None
-    subscribe_bus: Callable[[Any], Any] | None = None
+    # Extra event-bus subscriber attached before the run publishes (e.g. a
+    # host's billing usage ledger); its task is awaited after the bus closes.
+    subscribe_bus: Callable[[InMemoryEventBus], asyncio.Task[None] | None] | None = None
 
 
 class TurnWiring(Protocol):
@@ -119,7 +123,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         async def _spa_fallback(request: Any, exc: Any):  # noqa: ANN202
             from fastapi.responses import FileResponse, JSONResponse
 
-            if request.url.path.startswith("/api"):
+            from penny.api.routes import API_PREFIX
+
+            if request.url.path.startswith(API_PREFIX):
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
             index = cfg.static_dir / "index.html"  # type: ignore[operator]
             if index.exists():

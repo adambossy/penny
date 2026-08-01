@@ -200,23 +200,14 @@ def sync(
     The headless peer of the ``sync_transactions`` agent tool, run on a
     schedule by ``penny daemon``.
     """
-    from penny.adapters.clients.plaid import PlaidClient
     from penny.bootstrap import bootstrap
-    from penny.db import get_db
     import penny.observability as observability
-    from penny.services import build_categorizer, get_taxonomy
     from penny.tools._services.sync_service import SyncTool
 
     bootstrap()
 
     async def _sync() -> dict[str, object]:
-        sync_tool = SyncTool(
-            plaid_client=PlaidClient.from_env(),
-            categorizer_factory=build_categorizer,
-            db=get_db(),
-            taxonomy=get_taxonomy(),
-        )
-        summary = await sync_tool.sync(count=count)
+        summary = await SyncTool.from_env().sync(count=count)
         return summary.to_dict()
 
     try:
@@ -302,9 +293,7 @@ def init() -> None:
         if secret and value == "(set)":
             return  # keep the stored secret
         if value:
-            prior_env[key] = value
-        elif key in prior_env and not value:
-            pass  # keep prior on empty re-entry
+            prior_env[key] = value  # empty re-entry keeps the prior answer
 
     # 1. Workspace ("data room").
     workspace = resolve_workspace_dir()
@@ -379,15 +368,9 @@ def init() -> None:
     apply_config_to_env()
 
     # 6. Database setup: migrate (postgres) or create (sqlite), then seed.
-    from penny.bootstrap import bootstrap
-    from penny.db import resolve_database_url
+    from penny.bootstrap import prepare_database
 
-    if not resolve_database_url().startswith("sqlite"):
-        from penny.schema import upgrade_to_head
-
-        typer.echo("Applying migrations to Postgres…")
-        upgrade_to_head()
-    bootstrap()
+    prepare_database()
     typer.echo("Database ready (schema + taxonomy).")
 
     # 7. Daemon.
@@ -432,18 +415,12 @@ def daemon_run() -> None:
     run_daemon()
 
 
+# "install" and "start" are the same idempotent operation ((re)write the
+# service definition, (re)start it) — one body, two spellings.
 @_daemon_app.command("install")
-def daemon_install() -> None:
-    """Install + start the daemon as a user service (launchd / systemd)."""
-    from penny.service_install import install_and_start
-    from penny.workspace import resolve_logs_dir
-
-    typer.echo(install_and_start(resolve_logs_dir()))
-
-
 @_daemon_app.command("start")
 def daemon_start() -> None:
-    """Start (or restart) the installed daemon service."""
+    """Install (if needed) + start the daemon as a user service."""
     from penny.service_install import install_and_start
     from penny.workspace import resolve_logs_dir
 
@@ -463,7 +440,7 @@ def daemon_status() -> None:
     """Show whether the daemon runs and each job's last outcome."""
     import json as _json
 
-    from penny.daemon import read_state, state_path
+    from penny.daemon_state import read_state, state_path
     from penny.service_install import is_running
 
     typer.echo(f"service running: {is_running()}")
@@ -508,13 +485,9 @@ def serve(
     import uvicorn
 
     from penny.api.app import AppConfig, create_app
-    from penny.db import resolve_database_url
+    from penny.bootstrap import prepare_database
 
-    if not resolve_database_url().startswith("sqlite"):
-        from penny.schema import upgrade_to_head
-
-        upgrade_to_head()
-        typer.echo("Applied database migrations (postgres).")
+    prepare_database()
 
     static: Path | None = None
     if frontend_dir is not None:

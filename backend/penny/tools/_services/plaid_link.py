@@ -79,7 +79,6 @@ def create_link_token(
 
 
 async def exchange_public_token(
-    session: Any,
     *,
     public_token: str,
     conversation_id: str,
@@ -109,36 +108,38 @@ async def exchange_public_token(
         "institution_name"
     ) or "Your bank"
 
-    # At-rest encryption when PENNY_PLAID_TOKEN_KEY is configured (opt-in
-    # single-player; the local DB file is the user's own).
-    stored_token = encrypt_token_at_rest(access_token)
-    session.add(
-        PlaidItem(
-            item_id=item_id,
-            access_token=stored_token,
-            institution_name=institution,
-        )
-    )
-    # Flush the item before its accounts so the FK (accounts.item_id →
-    # plaid_items) resolves under SQLite's enforced foreign keys.
-    session.flush()
-    for account in accounts:
-        session.add(
-            PlaidAccount(
-                account_id=account["account_id"],
-                item_id=item_id,
-                name=account.get("name"),
-            )
-        )
-    session.flush()
+    # The service owns its session, committed and closed BEFORE the sync kick
+    # and the reminder enqueue below: both open their own connections onto the
+    # same single-player database, and SQLite (WAL or not) allows one writer —
+    # holding a write transaction open across them would deadlock into
+    # "database is locked".
+    def _persist() -> None:
+        from penny.db import get_db
 
-    # Commit before the sync kick and the reminder enqueue: both open their own
-    # connections onto the same single-player database, and SQLite (WAL or not)
-    # allows one writer — holding this session's write transaction open across
-    # the enqueue would deadlock into "database is locked". Committing releases
-    # the lock (and lets the sync thread see the item); the caller's session
-    # context manager commit then finds nothing left to do.
-    session.commit()
+        # At-rest encryption when PENNY_PLAID_TOKEN_KEY is configured (opt-in
+        # single-player; the local DB file is the user's own).
+        stored_token = encrypt_token_at_rest(access_token)
+        with get_db().session() as session:
+            session.add(
+                PlaidItem(
+                    item_id=item_id,
+                    access_token=stored_token,
+                    institution_name=institution,
+                )
+            )
+            # Flush the item before its accounts so the FK (accounts.item_id →
+            # plaid_items) resolves under SQLite's enforced foreign keys.
+            session.flush()
+            for account in accounts:
+                session.add(
+                    PlaidAccount(
+                        account_id=account["account_id"],
+                        item_id=item_id,
+                        name=account.get("name"),
+                    )
+                )
+
+    await asyncio.to_thread(_persist)
 
     # First sync: fire-and-forget so the exchange returns immediately.
     (sync or _default_sync())(item_id)
@@ -162,18 +163,10 @@ def _default_sync() -> Callable[[str], None]:
 
     def _kick(item_id: str) -> None:
         def _run() -> None:
-            from penny.db import get_db
-            from penny.services import build_categorizer, get_taxonomy
             from penny.tools._services.sync_service import SyncTool
 
             try:
-                tool = SyncTool(
-                    plaid_client=PlaidClient.from_env(),
-                    categorizer_factory=build_categorizer,
-                    db=get_db(),
-                    taxonomy=get_taxonomy(),
-                )
-                asyncio.run(tool.sync())
+                asyncio.run(SyncTool.from_env().sync())
             except Exception:
                 logger.exception("first sync after link failed for item {}", item_id)
 

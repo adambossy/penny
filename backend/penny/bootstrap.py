@@ -18,6 +18,24 @@ from .db import get_db
 _TAXONOMY_YAML = Path(__file__).resolve().parent.parent / "configs" / "taxonomy.yaml"
 
 
+def prepare_database() -> None:
+    """Make the configured database fully ready: migrate, create, seed.
+
+    The one call for front doors that must leave the schema current (``penny
+    init``/``serve``): on Postgres the alembic chain is applied first
+    (idempotent; refuses multi-tenant targets), then :func:`bootstrap` builds
+    (SQLite) / seeds as usual.
+    """
+    from .db import resolve_database_url
+
+    if not resolve_database_url().startswith("sqlite"):
+        from .schema import upgrade_to_head
+
+        logger.info("Applying alembic migrations (postgres)…")
+        upgrade_to_head()
+    bootstrap()
+
+
 def bootstrap() -> None:
     """Ensure schema + seed the taxonomy.
 
@@ -36,17 +54,9 @@ def bootstrap() -> None:
     else:
         # REQUIREMENTS T3: never run the single-player app against the hosted
         # multi-tenant database — refuse before touching anything.
-        import sqlalchemy as sa
+        from .schema import refuse_multi_tenant
 
-        if "households" in sa.inspect(db._engine).get_table_names():
-            from .schema import ForeignDatabaseError
-
-            raise ForeignDatabaseError(
-                "Refusing to start: this looks like a HOSTED multi-tenant "
-                "Penny database (a 'households' table exists). Point "
-                "PENNY_DATABASE_URL at a database of your own, or export "
-                "your data with backend/transient/single-player-export."
-            )
+        refuse_multi_tenant(db.engine, action="start")
     with db.session() as session:
         seed_taxonomy(session)
 

@@ -71,7 +71,7 @@ def _assemble_agent_memory(workspace_dir: Path | None = None) -> str:
     return "\n\n".join(parts)
 
 
-def _render_system_prompt(workspace_dir: Path | None = None) -> str:
+def render_system_prompt(workspace_dir: Path | None = None) -> str:
     """Render the penny-system-prompt prompt with full runtime context.
 
     Fills: today's date + ISO week, DB dialect + dialect directives, schema
@@ -207,7 +207,7 @@ def build_agent(
     return Agent(
         name="penny",
         model=model,
-        instructions=_render_system_prompt(workspace_dir),
+        instructions=render_system_prompt(workspace_dir),
         session=session,
         persist_session=persist_session,
         sandbox=sandbox,

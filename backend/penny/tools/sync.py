@@ -11,9 +11,7 @@ from typing import Any
 
 from agent_harness import tool
 
-from penny.adapters.clients.plaid import PlaidClient
 from penny.db import get_db
-from penny.services import build_categorizer, get_taxonomy
 from penny.tools._services.sync_service import SyncTool
 
 
@@ -33,13 +31,7 @@ async def sync_transactions(count: int = 250) -> dict[str, Any]:
         ``{"status": "error", "message": ...}`` on failure.
     """
     try:
-        plaid_client = PlaidClient.from_env()
-        sync_service = SyncTool(
-            plaid_client=plaid_client,
-            categorizer_factory=build_categorizer,
-            db=get_db(),
-            taxonomy=get_taxonomy(),
-        )
+        sync_service = SyncTool.from_env()
         summary = await sync_service.sync(count=count)
         return {"status": "success", **summary.to_dict()}
     except Exception as exc:
@@ -66,16 +58,10 @@ async def sync_status() -> dict[str, Any]:
     from datetime import UTC, datetime
 
     def _run() -> dict[str, Any]:
-        from sqlalchemy import func, select
-
-        from penny.adapters.db.models import PlaidTransaction
-        from penny.daemon import read_state
+        from penny.daemon_state import read_state
 
         state = read_state()
-        with get_db().session() as s:
-            newest = s.execute(
-                select(func.max(PlaidTransaction.created_at))
-            ).scalar_one_or_none()
+        newest = get_db().max_plaid_transaction_created_at()
         sync_state = state.get("sync") or {}
         return {
             "status": "success",

@@ -32,14 +32,19 @@ class ConversationStore:
     """Persistence façade for conversations and their messages."""
 
     def __init__(self, session_factory: Any = None) -> None:
-        # Default to the process-wide engine; tests may inject a factory.
-        from penny.db import get_db
-
-        self._session_factory = session_factory or get_db().session_factory
+        # Tests may inject a factory; the default resolves the process-wide
+        # engine per call, so a store built at app-creation time follows the
+        # DB singleton (which tests repoint between runs).
+        self._session_factory = session_factory
 
     @contextmanager
     def session(self) -> Iterator[Session]:
-        session = self._session_factory()
+        factory = self._session_factory
+        if factory is None:
+            from penny.db import get_db
+
+            factory = get_db().session_factory
+        session = factory()
         try:
             yield session
             session.commit()
@@ -210,21 +215,50 @@ class ConversationStore:
                 session.expunge(row)
             return rows
 
-    def latest_activity(self, conversation_id: str) -> tuple[str, datetime] | None:
-        """The (role, updated_at) of a conversation's newest message.
+    def begin_turn(
+        self,
+        conversation_id: str,
+        *,
+        ai_sdk_message_id: str | None,
+        text: str,
+    ) -> list[ConversationMessage]:
+        """Open a chat turn in one transaction; return the PRIOR transcript.
 
-        A trailing ``user`` message means a turn is in flight (persisted up
-        front, before dispatch); an ``assistant`` message means the turn
-        finished. ``None`` when the conversation has no messages yet.
+        Ensures the conversation exists, captures the messages so far (they
+        exclude this turn — the agent loop appends the prompt itself), persists
+        the user turn up front (durable on mid-stream disconnect), and derives
+        the title from the first user text. One session instead of four
+        round-trips, so the streaming server pays a single hop per turn.
         """
         with self.session() as session:
-            row = (
+            conv = session.get(Conversation, conversation_id)
+            if conv is None:
+                conv = Conversation(conversation_id=conversation_id)
+                session.add(conv)
+                session.flush()
+            prior = (
                 session.query(ConversationMessage)
                 .filter(ConversationMessage.conversation_id == conversation_id)
-                .order_by(ConversationMessage.seq.desc())
-                .first()
+                .order_by(ConversationMessage.seq.asc())
+                .all()
             )
-            return None if row is None else (row.role, row.updated_at)
+            session.add(
+                ConversationMessage(
+                    conversation_id=conversation_id,
+                    ai_sdk_message_id=ai_sdk_message_id,
+                    seq=self._next_seq(session, conversation_id),
+                    role="user",
+                    parts=[{"type": "text", "text": text}],
+                    status="complete",
+                )
+            )
+            title = _derive_title(text)
+            if title and not conv.title:
+                conv.title = title
+            conv.updated_at = datetime.now()
+            for row in prior:
+                session.expunge(row)
+            return prior
 
     # ----- internals -------------------------------------------------------
 

@@ -43,8 +43,8 @@ def _alembic_ini() -> Path:
     )
 
 
-def _refuse_multi_tenant(database_url: str) -> None:
-    """Refuse to run single-player migrations against a multi-tenant database.
+def refuse_multi_tenant(engine: sa.Engine, *, action: str = "migrate") -> None:
+    """Refuse to run the single-player app against a multi-tenant database.
 
     REQUIREMENTS T3: the hosted (multi-tenant) database must never receive
     core migrations past the 028 fork — migration 029 would destroy its
@@ -54,27 +54,28 @@ def _refuse_multi_tenant(database_url: str) -> None:
     caller with a genuinely multi-tenant Penny DB migrates it with the
     penny-web tooling, or moves data here via the single-player export tool
     (backend/transient/single-player-export).
+
+    The single source of the tell — both ``upgrade_to_head`` (migrate) and
+    ``bootstrap`` (serve) call this. ``action`` names the refused operation
+    in the error ("migrate", "start", ...).
     """
-    engine = sa.create_engine(database_url)
-    try:
-        inspector = sa.inspect(engine)
-        has_households = "households" in inspector.get_table_names()
-        version: str | None = None
-        if has_households and "alembic_version" in inspector.get_table_names():
-            with engine.connect() as conn:
-                version = conn.execute(
-                    sa.text("SELECT version_num FROM alembic_version")
-                ).scalar_one_or_none()
-    finally:
-        engine.dispose()
-    if has_households:
-        raise ForeignDatabaseError(
-            "Refusing to migrate: this looks like a HOSTED multi-tenant Penny "
-            f"database (a 'households' table exists; alembic_version={version!r}). "
-            "Single-player migrations (029+) would destroy its tenancy. Point "
-            "PENNY_DATABASE_URL at a database of your own, or export your data "
-            "with backend/transient/single-player-export first."
-        )
+    inspector = sa.inspect(engine)
+    tables = inspector.get_table_names()
+    if "households" not in tables:
+        return
+    version: str | None = None
+    if "alembic_version" in tables:
+        with engine.connect() as conn:
+            version = conn.execute(
+                sa.text("SELECT version_num FROM alembic_version")
+            ).scalar_one_or_none()
+    raise ForeignDatabaseError(
+        f"Refusing to {action}: this looks like a HOSTED multi-tenant Penny "
+        f"database (a 'households' table exists; alembic_version={version!r}). "
+        "Single-player migrations (029+) would destroy its tenancy. Point "
+        "PENNY_DATABASE_URL at a database of your own, or export your data "
+        "with backend/transient/single-player-export first."
+    )
 
 
 def upgrade_to_head(database_url: str | None = None) -> None:
@@ -84,10 +85,14 @@ def upgrade_to_head(database_url: str | None = None) -> None:
     ``sqlalchemy.url`` set here over ``DATABASE_URL``, so a caller can migrate a
     chosen DB even when a stray ``DATABASE_URL`` points elsewhere. With no
     argument the configured URL (``PENNY_DATABASE_URL``/``DATABASE_URL``) is
-    used. Refuses multi-tenant targets (see :func:`_refuse_multi_tenant`).
+    used. Refuses multi-tenant targets (see :func:`refuse_multi_tenant`).
     """
     url = database_url or resolve_database_url()
-    _refuse_multi_tenant(url)
+    engine = sa.create_engine(url)
+    try:
+        refuse_multi_tenant(engine)
+    finally:
+        engine.dispose()
     cfg = Config(str(_alembic_ini()))
     cfg.set_main_option("sqlalchemy.url", url)
     command.upgrade(cfg, "head")

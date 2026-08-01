@@ -3,7 +3,7 @@ per-run eval fixture.
 
 The eval replays the categorizer against a *writable, throwaway* copy of prod
 finance data. That copy is a local SQLite file built by `snapshot_to_sqlite`
-(and `snapshot_finance_to_sqlite` for the RLS-scoped read-only path) — no Neon
+(reading whatever handle it's given, including a read-only one) — no Neon
 branch, no control-plane credential. At the end of a run the same SQLite is
 bundled into a fixture and uploaded to R2 so a backtest can replay the exact
 frozen input + history.
@@ -94,14 +94,6 @@ def snapshot_to_sqlite(src_db: DB, sqlite_path: str | Path) -> DB:
     dst_db = DB(f"sqlite:///{sqlite_path}", enforce_sqlite_fks=False)
     dst_db.create_schema()
     _copy_tables(src_db, dst_db)
-    return dst_db
-
-
-def snapshot_finance_to_sqlite(readonly_db: DB, sqlite_path: str | Path) -> DB:
-    """Snapshot the finance closure through the read-only handle into SQLite."""
-    dst_db = DB(f"sqlite:///{sqlite_path}", enforce_sqlite_fks=False)
-    dst_db.create_schema()
-    _copy_tables(readonly_db, dst_db)
     return dst_db
 
 

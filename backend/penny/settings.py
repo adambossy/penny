@@ -17,9 +17,20 @@ import stat
 import tomllib
 from typing import Any
 
+from loguru import logger
+
 from penny.workspace import resolve_workspace_dir
 
 _CONFIG_NAME = "config.toml"
+
+# The daemon cadence defaults — one home, consumed by both load_schedule and
+# write_config so the wizard and the daemon can't disagree.
+_SCHEDULE_DEFAULTS: dict[str, int] = {
+    "sync_interval_hours": 12,
+    # Weekly report: ISO weekday (1=Mon … 7=Sun) + local hour.
+    "report_weekday": 1,
+    "report_hour": 8,
+}
 
 
 def config_path() -> Path:
@@ -27,14 +38,25 @@ def config_path() -> Path:
 
 
 def load_config() -> dict[str, Any]:
-    """Parse the workspace config.toml ({} when absent or unreadable)."""
+    """Parse the workspace config.toml ({} when absent or unreadable).
+
+    An unreadable/corrupt file degrades to {} so every entrypoint still
+    starts, but loudly — this file holds the user's keys, and silently
+    dropping them would surface only as confusing downstream failures.
+    """
     path = config_path()
     if not path.exists():
         return {}
     try:
         with path.open("rb") as fh:
             return tomllib.load(fh)
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        logger.warning(
+            "Ignoring unreadable workspace config {} ({}); re-run `penny init` "
+            "to rewrite it.",
+            path,
+            exc,
+        )
         return {}
 
 
@@ -57,10 +79,8 @@ def load_schedule() -> dict[str, Any]:
     schedule = load_config().get("schedule")
     schedule = schedule if isinstance(schedule, dict) else {}
     return {
-        "sync_interval_hours": int(schedule.get("sync_interval_hours", 12)),
-        # Weekly report: ISO weekday (1=Mon … 7=Sun) + local hour.
-        "report_weekday": int(schedule.get("report_weekday", 1)),
-        "report_hour": int(schedule.get("report_hour", 8)),
+        key: int(schedule.get(key, default))
+        for key, default in _SCHEDULE_DEFAULTS.items()
     }
 
 
@@ -73,14 +93,12 @@ def write_config(env: dict[str, str], schedule: dict[str, Any]) -> Path:
     for key in sorted(env):
         value = env[key].replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'{key} = "{value}"')
+    lines += ["", "[schedule]"]
     lines += [
-        "",
-        "[schedule]",
-        f"sync_interval_hours = {int(schedule.get('sync_interval_hours', 12))}",
-        f"report_weekday = {int(schedule.get('report_weekday', 1))}",
-        f"report_hour = {int(schedule.get('report_hour', 8))}",
-        "",
+        f"{key} = {int(schedule.get(key, default))}"
+        for key, default in _SCHEDULE_DEFAULTS.items()
     ]
+    lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
     path.chmod(stat.S_IRUSR | stat.S_IWUSR)
     return path

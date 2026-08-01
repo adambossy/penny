@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -23,18 +24,21 @@ _LABEL = "com.penny.daemon"
 _UNIT = "penny-daemon.service"
 
 
-def _penny_executable() -> str:
-    """The installed ``penny`` console script, or a ``-m penny.cli`` fallback."""
+def penny_argv() -> list[str]:
+    """Argv that invokes penny: the console script, or a ``-m penny.cli`` fallback.
+
+    The canonical form is a list — each consumer renders it (plist array,
+    shell-quoted systemd line, subprocess argv), so paths with spaces survive.
+    """
     found = shutil.which("penny")
     if found:
-        return found
-    return f"{sys.executable} -m penny.cli"
+        return [found]
+    return [sys.executable, "-m", "penny.cli"]
 
 
 def _launchd_plist(log_dir: Path) -> str:
-    exe = _penny_executable().split()
     args = "\n".join(
-        f"        <string>{part}</string>" for part in [*exe, "daemon", "run"]
+        f"        <string>{part}</string>" for part in [*penny_argv(), "daemon", "run"]
     )
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -64,7 +68,7 @@ def _systemd_unit() -> str:
 Description=Penny daemon (sync + scheduled reports)
 
 [Service]
-ExecStart={_penny_executable()} daemon run
+ExecStart={shlex.join([*penny_argv(), "daemon", "run"])}
 Restart=on-failure
 
 [Install]

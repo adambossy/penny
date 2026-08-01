@@ -25,7 +25,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.engine import CursorResult
+from sqlalchemy.engine import CursorResult, Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
@@ -196,10 +196,10 @@ def _enable_sqlite_wal(dbapi_connection: Any, _record: Any) -> None:
 def _stored_token(access_token: str) -> str:
     """Plaid access tokens are encrypted at rest when the key is configured.
 
-    Fails closed in clerk (prod) mode when no key is set (F07); unconfigured dev
-    keeps plaintext, and migration 017 encrypts the backlog once the key exists.
-    Already-encrypted values pass through, so re-saving never double-encrypts.
-    Decryption happens only at the Plaid wire seam
+    Unconfigured keeps plaintext (single-player: the local DB is the user's
+    own; encryption at rest is opt-in), and migration 017 encrypts the backlog
+    once the key exists. Already-encrypted values pass through, so re-saving
+    never double-encrypts. Decryption happens only at the Plaid wire seam
     (PlaidClient._with_decrypted_token).
     """
     from penny.security.token_cipher import encrypt_token_at_rest, is_encrypted
@@ -252,6 +252,11 @@ class DB:
     def dialect(self) -> str:
         """The engine's dialect name: ``"sqlite"`` | ``"postgresql"``."""
         return self._engine.dialect.name
+
+    @property
+    def engine(self) -> Engine:
+        """The underlying engine — for schema-level checks (bootstrap, guards)."""
+        return self._engine
 
     def create_schema(self) -> None:
         """Build the schema from the models. SQLite (ephemeral dev/test) ONLY.
@@ -1369,6 +1374,11 @@ class DB:
                 session.expunge(item)
             return items
 
+    def has_plaid_items(self) -> bool:
+        """True when at least one Plaid item is linked."""
+        with self.session() as session:  # type: Session
+            return session.query(PlaidItem.item_id).first() is not None
+
     def migrate_plaid_item_identity(
         self,
         *,
@@ -1463,6 +1473,14 @@ class DB:
             if result is None:
                 return None
             return cast(date, result)
+
+    def max_plaid_transaction_created_at(self) -> datetime | None:
+        """Return the newest ``created_at`` across all plaid_transactions."""
+        with self.session() as session:  # type: Session
+            result = session.query(func.max(PlaidTransaction.created_at)).scalar()
+            if result is None:
+                return None
+            return cast(datetime, result)
 
     def amazon_order_date_bounds(self) -> tuple[date, date] | None:
         """Return ``(min, max)`` of ``amazon_orders.order_date``.

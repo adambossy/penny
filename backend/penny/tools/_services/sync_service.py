@@ -336,6 +336,21 @@ class SyncTool:
             AmazonMutationPlugin(db, AmazonMutationPluginConfig())
         )
 
+    @classmethod
+    def from_env(cls) -> SyncTool:
+        """The default fully-wired sync tool: env Plaid creds + the shared
+        db/taxonomy/categorizer singletons. The one assembly every front door
+        (agent tool, CLI, first-sync kick) uses."""
+        from penny.db import get_db
+        from penny.services import build_categorizer, get_taxonomy
+
+        return cls(
+            plaid_client=PlaidClient.from_env(),
+            categorizer_factory=build_categorizer,
+            db=get_db(),
+            taxonomy=get_taxonomy(),
+        )
+
     async def sync(
         self,
         *,

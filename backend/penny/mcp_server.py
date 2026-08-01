@@ -28,42 +28,41 @@ class _ToolIndex:
 
     def __init__(self, toolsets: list[Toolset]) -> None:
         self._toolsets = toolsets
-        self._tools: dict[str, Any] | None = None
-        self._owner: dict[str, Toolset] = {}
+        self._index: dict[str, tuple[Toolset, Any]] | None = None
 
-    async def _ensure(self) -> dict[str, Any]:
-        if self._tools is None:
-            tools: dict[str, Any] = {}
+    async def _ensure(self) -> dict[str, tuple[Toolset, Any]]:
+        if self._index is None:
+            index: dict[str, tuple[Toolset, Any]] = {}
             for ts in self._toolsets:
                 for tool in await ts.list_tools(None):
-                    tools[tool.name] = tool
-                    self._owner[tool.name] = ts
-            self._tools = tools
-        return self._tools
+                    index[tool.name] = (ts, tool)
+            self._index = index
+        return self._index
 
     async def list_mcp_tools(self) -> list[mcp_types.Tool]:
-        tools = await self._ensure()
+        index = await self._ensure()
         return [
             mcp_types.Tool(
                 name=t.name,
                 description=t.description or "",
                 inputSchema=t.schema or {"type": "object", "properties": {}},
             )
-            for t in tools.values()
+            for _, t in index.values()
         ]
 
     async def call(
         self, name: str, arguments: dict[str, Any]
     ) -> mcp_types.CallToolResult:
-        await self._ensure()
-        toolset = self._owner.get(name)
-        if toolset is None:
+        index = await self._ensure()
+        entry = index.get(name)
+        if entry is None:
             return mcp_types.CallToolResult(
                 content=[
                     mcp_types.TextContent(type="text", text=f"unknown tool: {name}")
                 ],
                 isError=True,
             )
+        toolset, _ = entry
         call = ToolCall(
             id=f"call_{uuid.uuid4().hex[:8]}", name=name, arguments=arguments or {}
         )
@@ -107,9 +106,9 @@ def _instructions() -> str:
     business via the plugin agents-doc; ``initialize`` carries only what must
     be CURRENT: date, schema, taxonomy, memory, and the freshness contract.
     """
-    from penny.agent_factory import _render_system_prompt
+    from penny.agent_factory import render_system_prompt
 
-    rendered = _render_system_prompt()
+    rendered = render_system_prompt()
     return (
         "Penny — local personal-finance tools over the user's own database.\n"
         "Call sync_status before analysis when data freshness matters; if the "

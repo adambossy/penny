@@ -34,7 +34,7 @@ from sqlalchemy import select
 from penny.adapters.db.facade import DB
 from penny.adapters.db.models import Category, DerivedTransaction, PlaidTransaction
 from penny.adapters.storage.r2 import public_url_for_key, store_object_in_r2
-from penny.eval.fixture import build_fixture_bytes, snapshot_finance_to_sqlite
+from penny.eval.fixture import build_fixture_bytes, snapshot_to_sqlite
 from penny.eval.replay import replay_one
 from penny.eval.report import disagreements, render_eval_report
 from penny.eval.version import version_stamp
@@ -213,7 +213,7 @@ async def _run_eval_core(
     # Build a writable SQLite snapshot of the finance closure through the
     # read-only handle.
     with tempfile.TemporaryDirectory() as tmp:
-        snapshot = snapshot_finance_to_sqlite(readonly, Path(tmp) / "fixture.sqlite")
+        snapshot = snapshot_to_sqlite(readonly, Path(tmp) / "fixture.sqlite")
 
         with snapshot.session() as session:
             rows = session.execute(

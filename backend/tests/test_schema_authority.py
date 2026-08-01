@@ -56,7 +56,7 @@ class _FakeDB:
         # a real in-memory engine keeps the fake honest (and tenant-free).
         from sqlalchemy import create_engine
 
-        self._engine = create_engine("sqlite://")
+        self.engine = create_engine("sqlite://")
 
     def create_schema(self) -> None:
         self._calls.append("finance")
