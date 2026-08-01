@@ -324,12 +324,18 @@ def init() -> None:
     # 4. Plaid. The secret is stored under the env-specific var the client
     # actually reads (PLAID_<ENV>_SECRET), so ask for the environment first.
     ask("PLAID_CLIENT_ID", "Plaid client id")
-    ask(
-        "PLAID_ENV",
-        "Plaid environment (sandbox/development/production)",
-        default="production",
-    )
-    plaid_env = (prior_env.get("PLAID_ENV") or "production").strip().lower()
+    while True:
+        ask(
+            "PLAID_ENV",
+            "Plaid environment (sandbox/development/production)",
+            default="production",
+        )
+        plaid_env = (prior_env.get("PLAID_ENV") or "production").strip().lower()
+        if plaid_env in ("sandbox", "development", "production"):
+            prior_env["PLAID_ENV"] = plaid_env
+            break
+        typer.echo(f"  {plaid_env!r} is not a Plaid environment — try again.")
+        prior_env.pop("PLAID_ENV", None)
     ask(f"PLAID_{plaid_env.upper()}_SECRET", "Plaid secret", secret=True)
 
     # 5. Email (direct SMTP; a local MTA works via SMTP_HOST=localhost).
