@@ -25,7 +25,7 @@ _CONFIG_NAME = "config.toml"
 
 # The daemon cadence defaults — one home, consumed by both load_schedule and
 # write_config so the wizard and the daemon can't disagree.
-_SCHEDULE_DEFAULTS: dict[str, int] = {
+SCHEDULE_DEFAULTS: dict[str, int] = {
     "sync_interval_hours": 12,
     # Weekly report: ISO weekday (1=Mon … 7=Sun) + local hour.
     "report_weekday": 1,
@@ -80,7 +80,7 @@ def load_schedule() -> dict[str, Any]:
     schedule = schedule if isinstance(schedule, dict) else {}
     return {
         key: int(schedule.get(key, default))
-        for key, default in _SCHEDULE_DEFAULTS.items()
+        for key, default in SCHEDULE_DEFAULTS.items()
     }
 
 
@@ -96,7 +96,7 @@ def write_config(env: dict[str, str], schedule: dict[str, Any]) -> Path:
     lines += ["", "[schedule]"]
     lines += [
         f"{key} = {int(schedule.get(key, default))}"
-        for key, default in _SCHEDULE_DEFAULTS.items()
+        for key, default in SCHEDULE_DEFAULTS.items()
     ]
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")

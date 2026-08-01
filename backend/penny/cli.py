@@ -276,14 +276,14 @@ def init() -> None:
     from pathlib import Path
 
     from penny.identity import local_user_id
-    from penny.settings import load_config, write_config
+    from penny.settings import SCHEDULE_DEFAULTS, load_config, write_config
     from penny.workspace import resolve_workspace_dir
 
     existing = load_config()
     prior_env: dict[str, str] = {
         k: str(v) for k, v in (existing.get("env") or {}).items()
     }
-    prior_schedule = existing.get("schedule") or {}
+    prior_schedule = {**SCHEDULE_DEFAULTS, **(existing.get("schedule") or {})}
 
     def ask(key: str, prompt: str, *, default: str = "", secret: bool = False) -> None:
         """Prompt for one env value, defaulting to the stored answer."""
@@ -321,14 +321,16 @@ def init() -> None:
     ask("GOOGLE_API_KEY", "Google (Gemini) API key", secret=True)
     ask("PENNY_AGENT_MODEL", "Agent model", default="gemini-3.6-flash")
 
-    # 4. Plaid.
+    # 4. Plaid. The secret is stored under the env-specific var the client
+    # actually reads (PLAID_<ENV>_SECRET), so ask for the environment first.
     ask("PLAID_CLIENT_ID", "Plaid client id")
-    ask("PLAID_SECRET", "Plaid secret", secret=True)
     ask(
         "PLAID_ENV",
         "Plaid environment (sandbox/development/production)",
         default="production",
     )
+    plaid_env = (prior_env.get("PLAID_ENV") or "production").strip().lower()
+    ask(f"PLAID_{plaid_env.upper()}_SECRET", "Plaid secret", secret=True)
 
     # 5. Email (direct SMTP; a local MTA works via SMTP_HOST=localhost).
     ask("SMTP_HOST", "SMTP host", default="smtp.gmail.com")
@@ -345,19 +347,19 @@ def init() -> None:
         "sync_interval_hours": int(
             typer.prompt(
                 "Sync every N hours",
-                default=str(prior_schedule.get("sync_interval_hours", 12)),
+                default=str(prior_schedule["sync_interval_hours"]),
             )
         ),
         "report_weekday": int(
             typer.prompt(
                 "Weekly report weekday (1=Mon … 7=Sun)",
-                default=str(prior_schedule.get("report_weekday", 1)),
+                default=str(prior_schedule["report_weekday"]),
             )
         ),
         "report_hour": int(
             typer.prompt(
                 "Weekly report hour (local, 0-23)",
-                default=str(prior_schedule.get("report_hour", 8)),
+                default=str(prior_schedule["report_hour"]),
             )
         ),
     }
@@ -385,6 +387,9 @@ def init() -> None:
         "\nDone. Next steps:\n"
         "  penny serve         # local web UI at http://127.0.0.1:8000\n"
         "  penny daemon status # scheduler health\n"
+        "Claude Code plugin (same tools, same database):\n"
+        "  /plugin marketplace add adambossy/penny\n"
+        "  /plugin install penny@penny\n"
         "Remote access from your phone: use Tailscale (recommended) — an ngrok\n"
         "URL is a public door to your finances; protect it with ngrok's auth."
     )
