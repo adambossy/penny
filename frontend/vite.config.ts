@@ -32,6 +32,10 @@ export default defineConfig({
         find: "@penny/ui/styles.css",
         replacement: path.resolve(__dirname, "packages/ui/src/theme.css"),
       },
+      {
+        find: "@penny/ui/gallery",
+        replacement: path.resolve(__dirname, "packages/ui/src/Gallery.tsx"),
+      },
       { find: "@penny/ui", replacement: path.resolve(__dirname, "packages/ui/src/index.ts") },
       {
         find: "@penny/chat-ui",

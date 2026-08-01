@@ -25,11 +25,6 @@ function makeTransport(): ChatTransport<AiUIMessage> {
         },
       };
     },
-    // Reconnect (GET /api/chat/{id}/stream) after a dropped SSE.
-    prepareReconnectToStreamRequest: ({ api, id, headers }) => ({
-      api: `${api}/${id}/stream`,
-      headers,
-    }),
   });
 }
 
@@ -46,7 +41,9 @@ function errorMessage(error: unknown): string {
 }
 
 /** Pull a stream-level `error` SSE frame out of the latest assistant message,
- * if the AI SDK didn't already surface it via the top-level `error` state. */
+ * if the AI SDK didn't already surface it via the top-level `error` state.
+ * Only the latest assistant message can carry the current turn's error, so
+ * the scan stops there — this runs on every streamed delta. */
 function findStreamError(messages: AiUIMessage[]): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
@@ -55,6 +52,7 @@ function findStreamError(messages: AiUIMessage[]): string | null {
     for (const part of parts) {
       if (part?.type === "error" && typeof part.errorText === "string") return part.errorText;
     }
+    return null;
   }
   return null;
 }
@@ -158,11 +156,6 @@ export function ChatScreen({ sessionId, draft }: { sessionId: string; draft: boo
   const [history, setHistory] = useState<AiUIMessage[] | "not-found" | "error" | null>(
     draft ? [] : null,
   );
-  // True when the hydrated transcript ends on a user message — i.e. the page was
-  // (re)loaded mid-turn (the assistant's reply hasn't been finalized/persisted
-  // yet), so the chat should immediately try to resume the live stream. A
-  // completed turn always ends on the persisted assistant message.
-  const [initialIncomplete, setInitialIncomplete] = useState(false);
 
   // Hydrate persisted history before mounting the chat so refreshes and
   // backend restarts don't blank the transcript. A 404 (unknown id) renders
@@ -193,10 +186,6 @@ export function ChatScreen({ sessionId, draft }: { sessionId: string; draft: boo
     void hydrate().then((outcome) => {
       if (cancelled) return;
       hydratedRef.current = true;
-      if (Array.isArray(outcome)) {
-        const last = outcome[outcome.length - 1];
-        setInitialIncomplete(last?.role === "user");
-      }
       setHistory(outcome);
     });
     return () => {
@@ -220,65 +209,27 @@ export function ChatScreen({ sessionId, draft }: { sessionId: string; draft: boo
     );
   }
 
-  return (
-    <Chat
-      sessionId={sessionId}
-      draft={draft}
-      initialMessages={history}
-      initialIncomplete={initialIncomplete}
-    />
-  );
+  return <Chat sessionId={sessionId} draft={draft} initialMessages={history} />;
 }
 
 function Chat({
   sessionId,
   draft,
   initialMessages,
-  initialIncomplete,
 }: {
   sessionId: string;
   draft: boolean;
   initialMessages: AiUIMessage[];
-  initialIncomplete: boolean;
 }) {
   const navigate = useNavigate();
   const transport = useMemo(() => makeTransport(), []);
 
-  const { messages, sendMessage, status, error, resumeStream } = useChat({
+  const { messages, sendMessage, status, error } = useChat({
     id: sessionId,
     transport,
     messages: initialMessages,
     generateId: () => crypto.randomUUID(),
   });
-
-  // Resume a dropped SSE stream. The connection dies when the tab is
-  // backgrounded (mobile app-switch) but the sandbox keeps running server-side,
-  // so on return we reconnect (GET /api/chat/{id}/stream, replay-then-follow).
-  // `wasStreaming` gates it: only resume if a turn was actually in flight and we
-  // haven't since seen it finish — the backend 204s otherwise, but this avoids
-  // needless replays on ordinary tab switches.
-  const statusRef = useRef(status);
-  statusRef.current = status;
-  const wasStreamingRef = useRef(initialIncomplete);
-  useEffect(() => {
-    if (status === "submitted" || status === "streaming") wasStreamingRef.current = true;
-    else if (status === "ready") wasStreamingRef.current = false;
-  }, [status]);
-
-  useEffect(() => {
-    // On (re)load mid-turn, reconnect immediately rather than waiting for a
-    // visibility change.
-    if (initialIncomplete) void resumeStream().catch(() => {});
-    const onVisible = () => {
-      if (document.visibilityState !== "visible") return;
-      if (statusRef.current === "submitted" || statusRef.current === "streaming") return;
-      if (!wasStreamingRef.current) return;
-      void resumeStream().catch(() => {});
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resumeStream]);
 
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
