@@ -18,6 +18,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
+from penny.config import agent_model
+
 from .app import TurnWiring
 from .bridge import _sse, stream_and_persist
 from .hydration import conversation_to_ui
@@ -32,6 +34,15 @@ _SSE_HEADERS = {
     "x-vercel-ai-ui-message-stream": "v1",
     "Cache-Control": "no-cache, no-transform",
     "Connection": "keep-alive",
+}
+
+# Display names for the models Penny ships with. Anything else reports its raw
+# id: an unfamiliar-but-accurate label beats a pretty stale one, which is the
+# bug this endpoint exists to kill.
+_MODEL_LABELS = {
+    "gemini-3.6-flash": "Gemini 3.6 Flash",
+    "moonshotai/kimi-k3": "Kimi K3",
+    "z-ai/glm-5.2": "GLM-5.2",
 }
 
 
@@ -107,6 +118,19 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
     @router.get("/health")
     async def health() -> dict[str, bool]:
         return {"ok": True}
+
+    @router.get("/config")
+    async def get_config() -> dict[str, Any]:
+        """Runtime facts the UI displays — today, which model is answering.
+
+        The UI holds no model knowledge of its own: the name is configuration
+        (``PENNY_AGENT_MODEL``), so it is resolved here and reported, rather
+        than restated in the frontend where it would silently go stale.
+        """
+        model_id = agent_model()
+        return {
+            "model": {"id": model_id, "label": _MODEL_LABELS.get(model_id, model_id)}
+        }
 
     # Handlers doing synchronous DB work are plain ``def`` so FastAPI runs
     # them in its threadpool instead of stalling the SSE event loop.
