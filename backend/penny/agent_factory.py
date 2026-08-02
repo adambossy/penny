@@ -23,6 +23,14 @@ from agent_harness.core.models import ModelSettings, UsagePricer
 from agent_harness.core.skills import SkillRegistry, build_skill_tool
 from agent_harness.extras.reminders import ReminderQueue
 from agent_harness.providers.google import GeminiModel, GoogleProvider
+from agent_harness.providers.openrouter import (
+    GLM_5_2,
+    KIMI_K3,
+    MOONSHOT_DIRECT,
+    OpenRouterModel,
+    OpenRouterProvider,
+    RoutingPolicy,
+)
 from agent_harness.sandboxes.inprocess import InProcessSandbox
 from agent_harness.sessions.inmemory import InMemorySession
 
@@ -132,10 +140,51 @@ def render_system_prompt(workspace_dir: Path | None = None) -> str:
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent  # .../backend/
 
 
+AgentModel = GeminiModel | OpenRouterModel
+"""Every model shape ``build_model`` can return."""
+
+# The OpenRouter-served models Penny knows how to build, mapped to the routing
+# policy each one needs. Kimi K3 has exactly one upstream endpoint
+# (moonshotai/int4), so the harness's default US_FP8_ZDR policy matches zero
+# endpoints and every request 404s — pinning MOONSHOT_DIRECT here means no
+# caller has to know that. ``None`` keeps the harness default.
+_OPENROUTER_ROUTING: dict[str, RoutingPolicy | None] = {
+    KIMI_K3: MOONSHOT_DIRECT,
+    GLM_5_2: None,
+}
+
+
+def _build_openrouter_model(
+    name: str, credential: Credential | None
+) -> OpenRouterModel:
+    """Build an OpenRouter-served model (Anthropic-compatible wire format).
+
+    Capabilities resolve from the model id inside the harness, so Penny never
+    restates context/output limits it would have to keep in sync.
+    """
+    if credential is None:
+        api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError(
+                f"OPENROUTER_API_KEY is not set (required for PENNY_AGENT_MODEL={name})"
+            )
+        credential = ApiKeyCredential(provider="openrouter", key=api_key)
+    return OpenRouterModel(
+        provider=OpenRouterProvider(credential=credential),
+        name=name,
+        routing=_OPENROUTER_ROUTING[name],
+    )
+
+
 def build_model(
     *, credential: Credential | None = None, name: str | None = None
-) -> GeminiModel:
-    """Build a FRESH Gemini model — one provider per request, never shared.
+) -> AgentModel:
+    """Build a FRESH model — one provider per request, never shared.
+
+    The provider follows from the model *name*: OpenRouter ids are namespaced
+    ``vendor/model`` (``moonshotai/kimi-k3``), so ``PENNY_AGENT_MODEL`` alone
+    selects both the model and how to reach it — there is no second provider
+    variable to keep consistent with it.
 
     The harness resolves a run's credential by mutating the provider client
     (``use_credential``); a provider shared across concurrent users would race
@@ -145,38 +194,56 @@ def build_model(
     - explicit ``credential`` — the per-user gate decision (BYO key or the
       platform subsidy key) — builds the provider client directly;
     - no ``credential`` — the dev/default path reads the platform key from
-      ``GOOGLE_API_KEY`` and passes it as an explicit ``ApiKeyCredential`` so
-      dev chat/cron still work.
+      the provider's env var (``GOOGLE_API_KEY`` / ``OPENROUTER_API_KEY``) and
+      passes it as an explicit ``ApiKeyCredential`` so dev chat/cron still work.
     """
+    # Always name the model explicitly (PENNY_AGENT_MODEL, or the caller's
+    # override — e.g. the categorizer's PENNY_CATEGORIZER_MODEL) so the harness
+    # default never silently applies.
+    resolved = name or agent_model()
+    if resolved in _OPENROUTER_ROUTING:
+        return _build_openrouter_model(resolved, credential)
     if credential is None:
         api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
         if not api_key:
             raise RuntimeError("GOOGLE_API_KEY is not set")
         credential = ApiKeyCredential(provider="google", key=api_key)
-    # Always name the model explicitly (PENNY_AGENT_MODEL, or the caller's
-    # override — e.g. the categorizer's PENNY_CATEGORIZER_MODEL) so the harness
-    # default never silently applies.
-    return GeminiModel(
-        provider=GoogleProvider(credential=credential), name=name or agent_model()
-    )
+    return GeminiModel(provider=GoogleProvider(credential=credential), name=resolved)
 
 
-def _thinking_budget_from_env() -> int:
+_OPENROUTER_THINKING_BUDGET = 8192
+"""Default ``budget_tokens`` for OpenRouter-served models.
+
+Well under K3's 131k ``max_output_tokens`` — enough for real reasoning without
+crowding out the answer. Overridable via ``PENNY_AGENT_THINKING_BUDGET``.
+"""
+
+
+def _thinking_budget_from_env(model: AgentModel) -> int:
     """Thinking-token budget passed to the model (``PENNY_AGENT_THINKING_BUDGET``).
 
-    Gemini semantics: ``-1`` = dynamic (model decides how much to think),
-    ``0`` would disable thinking entirely. Must be set to a non-None value or
-    the provider omits ``thinking_config`` and Gemini streams no thought
-    summaries — the UI then shows nothing between tool calls while the model
-    thinks.
+    The budget is provider-generic in ``ModelSettings`` but its *domain* is not,
+    so the default has to follow the model:
+
+    - Gemini reads ``-1`` as "dynamic" (model decides) and ``0`` as off. It must
+      be non-None or the provider omits ``thinking_config`` and Gemini streams
+      no thought summaries — the UI then shows nothing between tool calls.
+    - OpenRouter rides the Anthropic Messages shape, which forwards the number
+      straight through as ``budget_tokens``; a negative value is rejected there,
+      so ``-1`` would 400 every request.
+
+    An explicit env override wins for both — it's the caller's business if they
+    set a value their model rejects.
     """
     raw = os.environ.get("PENNY_AGENT_THINKING_BUDGET", "").strip()
-    return int(raw) if raw else -1
+    if raw:
+        return int(raw)
+    return -1 if isinstance(model, GeminiModel) else _OPENROUTER_THINKING_BUDGET
 
 
 def build_agent(
     *,
-    model: GeminiModel,
+    model: AgentModel,
     session: InMemorySession,
     persist_session: bool = True,
     workspace_dir: Path | None = None,
@@ -211,7 +278,7 @@ def build_agent(
         session=session,
         persist_session=persist_session,
         sandbox=sandbox,
-        model_settings=ModelSettings(thinking_budget=_thinking_budget_from_env()),
+        model_settings=ModelSettings(thinking_budget=_thinking_budget_from_env(model)),
         # A subsidized run carries a pricer so the loop emits ModelUsage events
         # the billing subscriber accrues; a BYO run passes None (no metering).
         usage_pricer=usage_pricer,
