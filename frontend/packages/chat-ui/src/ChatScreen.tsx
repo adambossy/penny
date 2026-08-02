@@ -8,10 +8,43 @@ import { Message, Composer } from "@adambossy/agent-ui";
 import type { UIMessage } from "@adambossy/agent-ui";
 import { conversationPath } from "./routes";
 
-const MODEL = "gemini-3.6-flash";
+/** The active model, as reported by the backend (`GET /api/config`). */
+type ActiveModel = { id: string; label: string };
+
+/** Which model is answering. Configuration lives server-side
+ * (`PENNY_AGENT_MODEL`), so the UI asks rather than assumes — a hardcoded
+ * name here misreports the moment the model is switched.
+ *
+ * `null` until the fetch lands (and if it fails): the composer then shows no
+ * model chip at all, which is honest, where a guessed default would not be.
+ */
+function useActiveModel(): ActiveModel | null {
+  const [model, setModel] = useState<ActiveModel | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/config")
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        if (!cancelled && data?.model?.id) setModel(data.model as ActiveModel);
+      })
+      .catch(() => {
+        /* leave it unset — better a missing label than a wrong one */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return model;
+}
 
 // Reshape the AI SDK send body to the shape the backend's /api/chat expects.
-function makeTransport(): ChatTransport<AiUIMessage> {
+// `selectedChatModel` is advisory — this backend picks the model from its own
+// config and ignores the field — so it carries whatever the server reported,
+// never a name the client invented.
+function makeTransport(modelId: string | undefined): ChatTransport<AiUIMessage> {
   return new DefaultChatTransport<AiUIMessage>({
     api: "/api/chat",
     prepareSendMessagesRequest: ({ id, messages }) => {
@@ -20,7 +53,7 @@ function makeTransport(): ChatTransport<AiUIMessage> {
         body: {
           id,
           message: { id: latest.id, role: "user", parts: latest.parts },
-          selectedChatModel: MODEL,
+          selectedChatModel: modelId,
           selectedVisibilityType: "private",
         },
       };
@@ -222,7 +255,10 @@ function Chat({
   initialMessages: AiUIMessage[];
 }) {
   const navigate = useNavigate();
-  const transport = useMemo(() => makeTransport(), []);
+  const model = useActiveModel();
+  // Rebuilt when the model id arrives; `useChat` picks up the new transport
+  // without resetting the conversation.
+  const transport = useMemo(() => makeTransport(model?.id), [model?.id]);
 
   const { messages, sendMessage, status, error } = useChat({
     id: sessionId,
@@ -302,7 +338,7 @@ function Chat({
           // chat. The route re-renders with `draft` false, so this runs once.
           if (draft) void navigate(conversationPath(sessionId), { replace: true });
         }}
-        modelLabel="Gemini 3.6 Flash"
+        modelLabel={model?.label}
         footerHint="Penny can make mistakes — verify important numbers"
       />
     </div>
