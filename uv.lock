@@ -16,7 +16,7 @@ members = [
 [[package]]
 name = "agent-harness"
 version = "0.0.1"
-source = { git = "https://github.com/adambossy/agent-harness.git?rev=47a4e7bdd5a2957cb8b55c81edaa9fac5e18d8ca#47a4e7bdd5a2957cb8b55c81edaa9fac5e18d8ca" }
+source = { git = "https://github.com/adambossy/agent-harness.git?rev=22cc678#22cc678759a3ceb83b961af95d6fa1262f78e339" }
 dependencies = [
     { name = "griffe" },
     { name = "pydantic" },
@@ -1253,7 +1253,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-harness", extras = ["anthropic", "openai", "google", "otel"], git = "https://github.com/adambossy/agent-harness.git?rev=47a4e7bdd5a2957cb8b55c81edaa9fac5e18d8ca" },
+    { name = "agent-harness", extras = ["anthropic", "openai", "google", "otel"], git = "https://github.com/adambossy/agent-harness.git?rev=22cc678" },
     { name = "alembic", specifier = ">=1.18.4" },
     { name = "boto3", specifier = ">=1.26" },
     { name = "cryptography", specifier = ">=43.0" },
