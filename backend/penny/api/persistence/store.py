@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -26,6 +27,19 @@ _TITLE_MAX_LEN = 80
 
 class ConversationAccessError(Exception):
     """Conversation does not exist (route → 404)."""
+
+
+@dataclass(frozen=True, slots=True)
+class TurnOpening:
+    """What ``begin_turn`` hands the chat route, in one round trip.
+
+    ``model`` is the conversation's pinned selection key — the effective model
+    for this turn. ``None`` only for conversations that predate model
+    selection (the route falls back to the configured default).
+    """
+
+    prior_messages: list[ConversationMessage]
+    model: str | None
 
 
 class ConversationStore:
@@ -85,6 +99,24 @@ class ConversationStore:
             for row in rows:
                 session.expunge(row)
             return rows
+
+    def latest_model(self) -> str | None:
+        """The model pinned to the most recently updated conversation.
+
+        The pin is already a record of what the user last chose, so the
+        default for a *new* conversation derives from it — no preference
+        column, no client-side storage. Conversations that predate model
+        selection (NULL model) are skipped rather than treated as a choice,
+        so old history cannot drag the default backwards. ``None`` when no
+        conversation has a pin.
+        """
+        with self.session() as session:
+            return session.execute(
+                select(Conversation.model)
+                .where(Conversation.model.is_not(None))
+                .order_by(Conversation.updated_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
 
     def get_conversation(self, conversation_id: str) -> Conversation:
         """Return the conversation, or raise ``ConversationAccessError``."""
@@ -221,19 +253,28 @@ class ConversationStore:
         *,
         ai_sdk_message_id: str | None,
         text: str,
-    ) -> list[ConversationMessage]:
-        """Open a chat turn in one transaction; return the PRIOR transcript.
+        model: str | None = None,
+    ) -> TurnOpening:
+        """Open a chat turn in one transaction; return prior transcript + model.
 
         Ensures the conversation exists, captures the messages so far (they
         exclude this turn — the agent loop appends the prompt itself), persists
         the user turn up front (durable on mid-stream disconnect), and derives
         the title from the first user text. One session instead of four
-        round-trips, so the streaming server pays a single hop per turn.
+        round-trips, so the streaming server pays a single hop per turn — which
+        is also why the pinned model comes back in the return rather than a
+        second query.
+
+        ``model`` is pinned only on the create branch, mirroring the title:
+        the first request's choice wins, and a model arriving for an existing
+        conversation is ignored — that is the pin. (In the normal flow the
+        client only sends a model on the creating request anyway; the guard
+        covers stray later requests.)
         """
         with self.session() as session:
             conv = session.get(Conversation, conversation_id)
             if conv is None:
-                conv = Conversation(conversation_id=conversation_id)
+                conv = Conversation(conversation_id=conversation_id, model=model)
                 session.add(conv)
                 session.flush()
             prior = (
@@ -258,7 +299,7 @@ class ConversationStore:
             conv.updated_at = datetime.now()
             for row in prior:
                 session.expunge(row)
-            return prior
+            return TurnOpening(prior_messages=prior, model=conv.model)
 
     # ----- internals -------------------------------------------------------
 
