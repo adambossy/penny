@@ -1,33 +1,21 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 
 // Frontend dev server proxies /api/* to the Python backend so the browser
 // talks to a single origin (no CORS) and cookies/streaming pass through.
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
 
-// Resolve @adambossy/agent-ui to the local source checkout so edits in
-// ~/code/agent-ui hot-reload into Penny. Mirrors the alias the playground
-// uses internally. When the checkout doesn't exist (CI, other machines) the
-// published package from node_modules is used automatically; set
-// AGENT_UI_USE_PUBLISHED=1 to force it even with a checkout present.
-const AGENT_UI_SRC = path.resolve(
-  process.env.AGENT_UI_PATH ?? path.join(os.homedir(), "code/agent-ui/packages/agent-ui"),
-  "src",
-);
-const usePublished =
-  process.env.AGENT_UI_USE_PUBLISHED === "1" || !fs.existsSync(AGENT_UI_SRC);
-
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
-    // Force a single React instance. Without this, source-aliasing
-    // agent-ui makes its sibling `node_modules/react` resolve as a
+    // Force a single React instance. Historically, source-aliasing
+    // agent-ui made its sibling `node_modules/react` resolve as a
     // SECOND React copy (separate from Penny's `frontend/node_modules/react`),
-    // and hooks fire against a null dispatcher → blank screen.
+    // and hooks fired against a null dispatcher → blank screen. The alias is
+    // gone (agent-ui resolves from node_modules like any dependency), but the
+    // dedupe stays as a harmless guard.
     dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime"],
     alias: [
       {
@@ -43,15 +31,6 @@ export default defineConfig({
         find: "@penny/chat-ui",
         replacement: path.resolve(__dirname, "packages/chat-ui/src/index.ts"),
       },
-      ...(usePublished
-        ? []
-        : [
-            {
-              find: "@adambossy/agent-ui/styles.css",
-              replacement: path.join(AGENT_UI_SRC, "styles.css"),
-            },
-            { find: "@adambossy/agent-ui", replacement: path.join(AGENT_UI_SRC, "index.ts") },
-          ]),
     ],
   },
   server: {
