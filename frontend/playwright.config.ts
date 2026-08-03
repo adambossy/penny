@@ -61,11 +61,6 @@ export default defineConfig({
         // Point the E2E vite proxy at the E2E backend (dev setups often
         // have their own server on :8000).
         BACKEND_URL: "http://127.0.0.1:8183",
-        // CI has no ~/code/agent-ui checkout; resolve the published npm package
-        // instead of the source alias (matches vite.config's AGENT_UI_USE_PUBLISHED).
-        AGENT_UI_USE_PUBLISHED: process.env.CI
-          ? "1"
-          : (process.env.AGENT_UI_USE_PUBLISHED ?? "0"),
       },
     },
   ],
