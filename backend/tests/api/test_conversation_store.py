@@ -134,5 +134,82 @@ def test_list_conversations_newest_first(tmp_path: Path):
     assert output == expected_output
 
 
+def test_begin_turn_pins_model_on_create_only(tmp_path: Path):
+    """The first request's model wins; later requests cannot change the pin."""
+    from penny.api.persistence.models import Conversation
+
+    # setup
+    store = _make_store(tmp_path)
+
+    # act: create with a choice, then a later turn asking for something else
+    first = store.begin_turn(
+        "conv-m1", ai_sdk_message_id="u1", text="hi", model="claude-opus-5:xhigh"
+    )
+    second = store.begin_turn(
+        "conv-m1", ai_sdk_message_id="u2", text="again", model="gpt-5.5:low"
+    )
+    with store.session() as session:
+        stored = session.get(Conversation, "conv-m1").model
+
+    # expected: the pin is written once and reported on every turn
+    assert first.model == "claude-opus-5:xhigh"
+    assert second.model == "claude-opus-5:xhigh"
+    assert stored == "claude-opus-5:xhigh"
+
+
+def test_begin_turn_reports_a_null_model_for_prefeature_conversations(
+    tmp_path: Path,
+):
+    """A conversation created before model selection keeps model=None; a later
+    turn's model must not retro-pin it (it did not run on that model)."""
+    store = _make_store(tmp_path)
+    store.ensure_conversation("conv-m2")  # pre-feature: no model column value
+
+    opening = store.begin_turn(
+        "conv-m2", ai_sdk_message_id="u1", text="hello", model="gpt-5.5:low"
+    )
+
+    assert opening.model is None
+
+
+def test_begin_turn_returns_prior_transcript_and_model_together(tmp_path: Path):
+    """One transaction hands the route both — no second query per turn."""
+    store = _make_store(tmp_path)
+
+    first = store.begin_turn(
+        "conv-m3", ai_sdk_message_id="u1", text="hi", model="moonshotai/kimi-k3"
+    )
+    second = store.begin_turn(
+        "conv-m3", ai_sdk_message_id="u2", text="more", model=None
+    )
+
+    assert first.prior_messages == []
+    assert [m.role for m in second.prior_messages] == ["user"]
+    assert second.model == "moonshotai/kimi-k3"
+
+
+def test_latest_model_follows_most_recent_and_skips_unpinned(tmp_path: Path):
+    """The next-conversation default: the last pinned choice, with unpinned
+    (pre-feature) conversations skipped so old history cannot drag it back."""
+    from datetime import datetime
+
+    from penny.api.persistence.models import Conversation
+
+    store = _make_store(tmp_path)
+    assert store.latest_model() is None  # nothing pinned yet
+
+    store.begin_turn("old", ai_sdk_message_id="u1", text="a", model="gpt-5.5:low")
+    store.begin_turn(
+        "recent", ai_sdk_message_id="u2", text="b", model="claude-sonnet-5:high"
+    )
+    store.ensure_conversation("unpinned")  # pre-feature row, model=None
+    with store.session() as session:
+        session.get(Conversation, "old").updated_at = datetime(2026, 1, 1)
+        session.get(Conversation, "recent").updated_at = datetime(2026, 2, 1)
+        session.get(Conversation, "unpinned").updated_at = datetime(2026, 3, 1)
+
+    assert store.latest_model() == "claude-sonnet-5:high"
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

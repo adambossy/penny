@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from loguru import logger
 
 from penny.config import agent_model
+from penny.model_selection import label_for, offered_choices, parse_key, resolve_choice
 
 from .app import TurnWiring
 from .bridge import _sse, stream_and_persist
@@ -36,14 +37,12 @@ _SSE_HEADERS = {
     "Connection": "keep-alive",
 }
 
-# Display names for the models Penny ships with. Anything else reports its raw
-# id: an unfamiliar-but-accurate label beats a pretty stale one, which is the
-# bug this endpoint exists to kill.
-_MODEL_LABELS = {
-    "gemini-3.6-flash": "Gemini 3.6 Flash",
-    "moonshotai/kimi-k3": "Kimi K3",
-    "z-ai/glm-5.2": "GLM-5.2",
-}
+# What a conversation with no pinned model reports: a fixed historical
+# constant, deliberately NOT agent_model(). Every unpinned conversation
+# predates model selection and actually ran on Gemini 3.6 Flash — reporting
+# the live default instead would relabel history the moment the default
+# changes.
+_PRE_SELECTION_MODEL = "gemini-3.6-flash"
 
 
 def _text_from_message(message: dict[str, Any]) -> str:
@@ -120,16 +119,28 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
         return {"ok": True}
 
     @router.get("/config")
-    async def get_config() -> dict[str, Any]:
-        """Runtime facts the UI displays — today, which model is answering.
+    def get_config() -> dict[str, Any]:
+        """Runtime facts the UI displays — the model choices and the default.
 
-        The UI holds no model knowledge of its own: the name is configuration
-        (``PENNY_AGENT_MODEL``), so it is resolved here and reported, rather
-        than restated in the frontend where it would silently go stale.
+        The UI holds no model knowledge of its own: the offered choices come
+        from the model selection and the labels ride along, rather than being
+        restated in the frontend where they would silently go stale.
+
+        ``defaultModel`` is the model pinned to the most recently updated
+        conversation — the last choice sticks for the next conversation —
+        falling back to the configured default when nothing is pinned yet.
+        The picker seeds itself from this field, so the carry-forward costs
+        no extra request. ``model`` (the configured default) predates the
+        picker and keeps its shape.
         """
         model_id = agent_model()
         return {
-            "model": {"id": model_id, "label": _MODEL_LABELS.get(model_id, model_id)}
+            "model": {"id": model_id, "label": label_for(model_id)},
+            "models": [
+                {"key": choice.key, "label": choice.label}
+                for choice in offered_choices()
+            ],
+            "defaultModel": store.latest_model() or model_id,
         }
 
     # Handlers doing synchronous DB work are plain ``def`` so FastAPI runs
@@ -160,10 +171,17 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
         compatibility; it reads the conversation store.)
         """
         try:
+            conversation = store.get_conversation(session_id)
             rows = store.get_conversation_messages(session_id)
         except ConversationAccessError:
             raise HTTPException(status_code=404, detail="not found") from None
-        return {"sessionId": session_id, "messages": conversation_to_ui(rows)}
+        return {
+            "sessionId": session_id,
+            "messages": conversation_to_ui(rows),
+            # The pinned model; unpinned conversations report the model they
+            # actually ran on (see _PRE_SELECTION_MODEL), not the live default.
+            "model": conversation.model or _PRE_SELECTION_MODEL,
+        }
 
     @router.post("/plaid/exchange")
     async def plaid_exchange(request: Request) -> dict[str, Any]:
@@ -204,13 +222,35 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
         prompt = _extract_prompt(body)
         user_message_id = _extract_user_message_id(body)
 
+        # The model choice arrives only on the conversation-creating request;
+        # later turns carry none, which is the normal case, not an error.
+        # Validate BEFORE opening the turn (and before StreamingResponse —
+        # past that point errors can only be SSE frames): an unknown key is a
+        # crisp 400, never a silent fall-through to some other model, and
+        # never a pinned typo. The configured default is always acceptable —
+        # it is what an empty choice means.
+        selected = body.get("selectedChatModel")
+        if selected is not None and not (
+            isinstance(selected, str)
+            and (resolve_choice(selected) is not None or selected == agent_model())
+        ):
+            raise HTTPException(status_code=400, detail=f"unknown model: {selected!r}")
+
         # One transaction, off the event loop: ensure the conversation,
         # capture the PRIOR-turn context (excludes this turn — the loop
-        # appends the prompt), persist the user turn, derive the title.
-        prior_rows = await asyncio.to_thread(
-            store.begin_turn, chat_id, ai_sdk_message_id=user_message_id, text=prompt
+        # appends the prompt), persist the user turn, derive the title, and
+        # pin the model (create only — the first choice wins).
+        opening = await asyncio.to_thread(
+            store.begin_turn,
+            chat_id,
+            ai_sdk_message_id=user_message_id,
+            text=prompt,
+            model=selected or agent_model(),
         )
-        prior_messages = parts_to_messages(prior_rows)
+        prior_messages = parts_to_messages(opening.prior_messages)
+        # The effective model: the pin, or the configured default for
+        # conversations that predate model selection.
+        model_name, effort = parse_key(opening.model or agent_model())
 
         session = InMemorySession(session_id=chat_id)
         if prior_messages:
@@ -223,7 +263,10 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
                     from penny.api.persistence.onboarding import resolve
 
                     agent = build_agent(
-                        model=build_model(credential=provision.credential),
+                        model=build_model(
+                            credential=provision.credential, name=model_name
+                        ),
+                        effort=effort,
                         session=session,
                         persist_session=False,
                         workspace_dir=provision.workspace_dir,
