@@ -44,6 +44,11 @@ class Conversation(Base):
 
     conversation_id: Mapped[str] = mapped_column(String, primary_key=True)
     title: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The model selection key pinned at creation (``claude-opus-5:xhigh``).
+    # NULL means the conversation predates model selection — it ran on
+    # gemini-3.6-flash, and the API reports that fixed constant, not the
+    # current default (see routes.get_session).
+    model: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
