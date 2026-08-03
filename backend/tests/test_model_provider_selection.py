@@ -1,22 +1,22 @@
 """The provider follows from the model name (``penny.agent_factory``).
 
-``PENNY_AGENT_MODEL`` selects both the model and how Penny reaches it, so
-there is no second provider variable to drift out of sync. Two things are
-easy to get wrong and expensive to notice — both fail at *request* time, not
-construction time — so pin them here:
-
-- Kimi K3 has a single upstream endpoint, so it needs ``MOONSHOT_DIRECT``;
-  the harness's default policy matches zero endpoints and 404s.
-- ``thinking_budget`` is provider-generic but its domain is not: ``-1`` means
-  "dynamic" to Gemini and is rejected as ``budget_tokens`` on the
-  Anthropic-shaped OpenRouter path.
+Dispatch resolves the provider family from the harness catalogue, so a typo
+or an arbitrary client string raises instead of silently becoming a Gemini
+call (the old membership-test fall-through). Each non-Gemini branch resolves
+its own env credential and names both the missing variable and the model in
+its error, since these fail at *request* time otherwise. The thinking budget
+is family-derived and no longer env-overridable — with per-conversation
+models, one global number would hard-fail whichever family it wasn't written
+for.
 """
 
 from __future__ import annotations
 
 from agent_harness.core.credentials import ApiKeyCredential
 from agent_harness.core.errors import ConfigError
+from agent_harness.providers.anthropic import OPUS_5, AnthropicMessagesModel
 from agent_harness.providers.google import GeminiModel
+from agent_harness.providers.openai import GPT_5_6_SOL, OpenAIResponsesModel
 from agent_harness.providers.openrouter import (
     GLM_5_2,
     KIMI_K3,
@@ -25,15 +25,16 @@ from agent_harness.providers.openrouter import (
 )
 import pytest
 
-from penny.agent_factory import _thinking_budget_from_env, build_model
+from penny.agent_factory import _thinking_budget_for, build_model
 
 
 @pytest.fixture(autouse=True)
 def _clear_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PENNY_AGENT_MODEL", raising=False)
-    monkeypatch.delenv("PENNY_AGENT_THINKING_BUDGET", raising=False)
     monkeypatch.setenv("GOOGLE_API_KEY", "test-google-key")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-oai-test")
 
 
 def test_gemini_name_builds_a_google_model() -> None:
@@ -49,6 +50,33 @@ def test_openrouter_name_builds_an_openrouter_model() -> None:
     # The credential guard rejects a non-OpenRouter key, so the provider tag
     # matters as much as the base URL.
     assert model.provider.name == "openrouter"
+
+
+def test_anthropic_name_builds_an_anthropic_model() -> None:
+    model = build_model(name=OPUS_5)
+    assert isinstance(model, AnthropicMessagesModel)
+    assert model.name == OPUS_5
+    assert model.provider.name == "anthropic"
+
+
+def test_openai_name_builds_an_openai_model() -> None:
+    model = build_model(name=GPT_5_6_SOL)
+    assert isinstance(model, OpenAIResponsesModel)
+    assert model.name == GPT_5_6_SOL
+    assert model.provider.name == "openai"
+
+
+def test_composite_selection_key_builds_the_bare_model() -> None:
+    """The effort half of a pinned key belongs to ModelSettings, not the model."""
+    model = build_model(name=f"{OPUS_5}:xhigh")
+    assert isinstance(model, AnthropicMessagesModel)
+    assert model.name == OPUS_5
+
+
+def test_unknown_model_raises_instead_of_falling_through() -> None:
+    """The old membership test sent every unknown id to Gemini, silently."""
+    with pytest.raises(ValueError, match="not-a-model"):
+        build_model(name="not-a-model")
 
 
 def test_kimi_k3_pins_moonshot_direct_routing() -> None:
@@ -68,26 +96,31 @@ def test_env_selects_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(build_model(), OpenRouterModel)
 
 
-def test_missing_openrouter_key_names_the_model(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("env_var", "model_name", "match"),
+    [
+        ("OPENROUTER_API_KEY", KIMI_K3, r"OPENROUTER_API_KEY.*kimi-k3"),
+        ("ANTHROPIC_API_KEY", OPUS_5, r"ANTHROPIC_API_KEY.*claude-opus-5"),
+        ("OPENAI_API_KEY", GPT_5_6_SOL, r"OPENAI_API_KEY.*gpt-5.6-sol"),
+    ],
+)
+def test_missing_provider_key_names_the_model(
+    monkeypatch: pytest.MonkeyPatch, env_var: str, model_name: str, match: str
 ) -> None:
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match=r"OPENROUTER_API_KEY.*kimi-k3"):
-        build_model(name=KIMI_K3)
+    monkeypatch.delenv(env_var, raising=False)
+    with pytest.raises(RuntimeError, match=match):
+        build_model(name=model_name)
 
 
-def test_thinking_budget_defaults_per_dialect() -> None:
-    """-1 is Gemini's "dynamic"; the Anthropic shape rejects a negative budget."""
-    assert _thinking_budget_from_env(build_model(name="gemini-3.6-flash")) == -1
-    assert _thinking_budget_from_env(build_model(name=KIMI_K3)) > 0
-
-
-def test_explicit_thinking_budget_wins_for_both(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("PENNY_AGENT_THINKING_BUDGET", "4096")
-    assert _thinking_budget_from_env(build_model(name="gemini-3.6-flash")) == 4096
-    assert _thinking_budget_from_env(build_model(name=KIMI_K3)) == 4096
+def test_thinking_budget_is_family_derived() -> None:
+    """-1 is Gemini's "dynamic"; every other family needs a positive gate value
+    (the Anthropic wire shape rejects a negative budget; adaptive models and
+    OpenAI need it non-None for the thinking block and its streamed summaries).
+    """
+    assert _thinking_budget_for(build_model(name="gemini-3.6-flash")) == -1
+    assert _thinking_budget_for(build_model(name=KIMI_K3)) > 0
+    assert _thinking_budget_for(build_model(name=OPUS_5)) > 0
+    assert _thinking_budget_for(build_model(name=GPT_5_6_SOL)) > 0
 
 
 def test_mismatched_explicit_credential_fails_at_construction() -> None:
