@@ -8,18 +8,23 @@ import { Message, Composer } from "@adambossy/agent-ui";
 import type { UIMessage } from "@adambossy/agent-ui";
 import { conversationPath } from "./routes";
 
-/** The active model, as reported by the backend (`GET /api/config`). */
-type ActiveModel = { id: string; label: string };
+/** One offered model, in the shape the composer's picker consumes. */
+type ModelOption = { id: string; label: string };
 
-/** Which model is answering. Configuration lives server-side
- * (`PENNY_AGENT_MODEL`), so the UI asks rather than assumes — a hardcoded
- * name here misreports the moment the model is switched.
+/** The offered models plus the default selection (`GET /api/config`). */
+type ModelConfig = { models: ModelOption[]; defaultModelId: string };
+
+/** Which models are offered and which one is the default. Configuration
+ * lives server-side (the model selection), so the UI asks rather than
+ * assumes — a hardcoded list here misreports the moment the catalogue
+ * changes. The backend keys choices by composite `key`; the picker speaks
+ * `id`, so the mapping happens here at the fetch boundary.
  *
  * `null` until the fetch lands (and if it fails): the composer then shows no
  * model chip at all, which is honest, where a guessed default would not be.
  */
-function useActiveModel(): ActiveModel | null {
-  const [model, setModel] = useState<ActiveModel | null>(null);
+function useModelConfig(): ModelConfig | null {
+  const [config, setConfig] = useState<ModelConfig | null>(null);
   useEffect(() => {
     let cancelled = false;
     fetch("/api/config")
@@ -27,23 +32,33 @@ function useActiveModel(): ActiveModel | null {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
-      .then((data) => {
-        if (!cancelled && data?.model?.id) setModel(data.model as ActiveModel);
+      .then((data: { models?: Array<{ key?: string; label?: string }>; defaultModel?: string }) => {
+        if (cancelled) return;
+        const models = (data?.models ?? []).flatMap((m) =>
+          typeof m?.key === "string" && typeof m?.label === "string"
+            ? [{ id: m.key, label: m.label }]
+            : [],
+        );
+        if (models.length > 0 && typeof data?.defaultModel === "string") {
+          setConfig({ models, defaultModelId: data.defaultModel });
+        }
       })
       .catch(() => {
-        /* leave it unset — better a missing label than a wrong one */
+        /* leave it unset — better a missing picker than a wrong one */
       });
     return () => {
       cancelled = true;
     };
   }, []);
-  return model;
+  return config;
 }
 
 // Reshape the AI SDK send body to the shape the backend's /api/chat expects.
-// `selectedChatModel` is advisory — this backend picks the model from its own
-// config and ignores the field — so it carries whatever the server reported,
-// never a name the client invented.
+// `selectedChatModel` rides ONLY the conversation-creating request — the pin
+// is set at creation and the server ignores the field thereafter, so later
+// turns omit it entirely (the normal case, not an error). The creating
+// request is the one carrying a single message: a draft's first send. It
+// always carries a server-reported key, never a name the client invented.
 function makeTransport(modelId: string | undefined): ChatTransport<AiUIMessage> {
   return new DefaultChatTransport<AiUIMessage>({
     api: "/api/chat",
@@ -53,7 +68,9 @@ function makeTransport(modelId: string | undefined): ChatTransport<AiUIMessage> 
         body: {
           id,
           message: { id: latest.id, role: "user", parts: latest.parts },
-          selectedChatModel: modelId,
+          ...(messages.length === 1 && modelId !== undefined
+            ? { selectedChatModel: modelId }
+            : {}),
           selectedVisibilityType: "private",
         },
       };
@@ -181,13 +198,17 @@ function ConversationNotFound() {
   );
 }
 
+/** What session hydration produced: the transcript plus the conversation's
+ * pinned model (absent on a draft, which has no pin until its first send). */
+type Hydrated = { messages: AiUIMessage[]; model?: string };
+
 export function ChatScreen({ sessionId, draft }: { sessionId: string; draft: boolean }) {
   // What hydration produced: pending (null), a transcript, "not-found", or
   // "error". A draft starts hydrated-empty — it has no history to load, and
   // the first-send `/` → `/c/<id>` URL replacement flips `draft` without
   // remounting (same key), so fetching then would clobber the in-flight turn.
-  const [history, setHistory] = useState<AiUIMessage[] | "not-found" | "error" | null>(
-    draft ? [] : null,
+  const [history, setHistory] = useState<Hydrated | "not-found" | "error" | null>(
+    draft ? { messages: [] } : null,
   );
 
   // Hydrate persisted history before mounting the chat so refreshes and
@@ -204,13 +225,13 @@ export function ChatScreen({ sessionId, draft }: { sessionId: string; draft: boo
     if (hydratedRef.current) return;
     let cancelled = false;
 
-    const hydrate = async (): Promise<AiUIMessage[] | "not-found" | "error"> => {
+    const hydrate = async (): Promise<Hydrated | "not-found" | "error"> => {
       try {
         const res = await fetch(`/api/sessions/${sessionId}`);
         if (res.status === 404) return "not-found";
         if (!res.ok) return "error";
-        const data = (await res.json()) as { messages?: AiUIMessage[] };
-        return data.messages ?? [];
+        const data = (await res.json()) as { messages?: AiUIMessage[]; model?: string };
+        return { messages: data.messages ?? [], model: data.model };
       } catch {
         return "error";
       }
@@ -242,23 +263,41 @@ export function ChatScreen({ sessionId, draft }: { sessionId: string; draft: boo
     );
   }
 
-  return <Chat sessionId={sessionId} draft={draft} initialMessages={history} />;
+  return (
+    <Chat
+      sessionId={sessionId}
+      draft={draft}
+      initialMessages={history.messages}
+      pinnedModelId={history.model}
+    />
+  );
 }
 
 function Chat({
   sessionId,
   draft,
   initialMessages,
+  pinnedModelId,
 }: {
   sessionId: string;
   draft: boolean;
   initialMessages: AiUIMessage[];
+  pinnedModelId?: string;
 }) {
   const navigate = useNavigate();
-  const model = useActiveModel();
-  // Rebuilt when the model id arrives; `useChat` picks up the new transport
-  // without resetting the conversation.
-  const transport = useMemo(() => makeTransport(model?.id), [model?.id]);
+  const config = useModelConfig();
+  // The local pick, meaningful only while the conversation has no messages.
+  // Deriving the effective selection (below) instead of copying the default
+  // into state means the picker seeds itself the moment the config lands.
+  const [pickedModelId, setPickedModelId] = useState<string | undefined>(undefined);
+  // The pin wins for a conversation that has started; a draft shows the
+  // local pick, falling back to the server-reported default. Once the first
+  // send pins the pick server-side, `pickedModelId` still holds it here, so
+  // the chip keeps reporting the right model without a refetch.
+  const selectedModelId = pinnedModelId ?? pickedModelId ?? config?.defaultModelId;
+  // Rebuilt when the selection changes (pre-first-send only); `useChat`
+  // picks up the new transport without resetting the conversation.
+  const transport = useMemo(() => makeTransport(selectedModelId), [selectedModelId]);
 
   const { messages, sendMessage, status, error } = useChat({
     id: sessionId,
@@ -275,6 +314,19 @@ function Chat({
 
   const isStreaming = status === "streaming" || status === "submitted";
   const showEmpty = messages.length === 0;
+  // Selection locks the moment the conversation has any messages —
+  // deliberately NOT gated on `draft`: the first-send URL replacement flips
+  // it without a remount, which would leave the picker editable through the
+  // whole first streaming turn. Message count latches immediately (the sent
+  // user message lands in `messages` synchronously) and stays latched.
+  const modelSelectDisabled = !showEmpty;
+  // The disabled chip renders `modelLabel`. A pin the catalogue no longer
+  // offers (e.g. the pre-selection `gemini-3.6-flash`) reports its raw key —
+  // honest, without the UI hardcoding model knowledge of its own. No config
+  // (fetch failed or pending) → no chip at all.
+  const modelLabel = config
+    ? (config.models.find((m) => m.id === selectedModelId)?.label ?? selectedModelId)
+    : undefined;
   const lastMessage = messages[messages.length - 1];
   const awaitingResponse =
     isStreaming &&
@@ -338,7 +390,11 @@ function Chat({
           // chat. The route re-renders with `draft` false, so this runs once.
           if (draft) void navigate(conversationPath(sessionId), { replace: true });
         }}
-        modelLabel={model?.label}
+        modelLabel={modelLabel}
+        models={config?.models}
+        selectedModelId={selectedModelId}
+        onSelectModel={setPickedModelId}
+        modelSelectDisabled={modelSelectDisabled}
         footerHint="Penny can make mistakes — verify important numbers"
       />
     </div>

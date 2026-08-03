@@ -25,7 +25,10 @@ test("long transcript scrolls internally; the document does not scroll", async (
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ messages }),
+      // `model`: the pinned model the session endpoint now reports; the UI
+      // destructures it for the composer chip. Any key works here — the spec
+      // asserts layout, not the chip — the legacy constant keeps it faithful.
+      body: JSON.stringify({ messages, model: "gemini-3.6-flash" }),
     }),
   );
 
