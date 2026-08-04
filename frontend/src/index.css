@@ -26,9 +26,14 @@
    unlike a path into the ~/code/agent-ui checkout, which does not exist in CI. */
 @source "../node_modules/@adambossy/agent-ui";
 /* Also scan the local source checkout when present, so edits to agent-ui
-   components hot-reload NEW classes during dev. Resolves only in the sibling
-   checkout layout; Tailwind harmlessly ignores it when absent (e.g. in CI). */
+   components hot-reload NEW classes during dev — without this, aliasing to
+   local source (PENNY_LOCAL_AGENT_UI, see vite.config.ts) compiles but any
+   class the published dist does not already contain is silently dropped.
+   Tailwind harmlessly ignores a path that does not resolve, so both layouts
+   are listed: the primary checkout, and a worktree under .claude/worktrees.
+   Neither resolves in CI, which is the point. */
 @source "../../../agent-ui/packages/agent-ui/src";
+@source "../../../../../../../agent-ui/packages/agent-ui/src";
 
 html,
 body,
