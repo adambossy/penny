@@ -127,6 +127,25 @@ def test_the_configured_default_is_always_acceptable(
     assert _pinned("c-echo") == "gemini-3.6-flash"
 
 
+def test_a_pin_with_a_dropped_effort_level_still_runs(
+    isolated_db, built_models: list[dict[str, Any]]
+) -> None:
+    """Delisting a model is survivable by design; a harness bump that narrows
+    Effort must be too. The stored pin runs as the bare model with no effort,
+    instead of 500ing every turn of the conversation."""
+    get_db().create_schema()
+    # Written when the harness still knew this level; parse_key rejects it now.
+    ConversationStore().begin_turn(
+        "c-old-effort", ai_sdk_message_id="u0", text="hi", model="claude-opus-5:hyper"
+    )
+
+    with TestClient(main.app) as client:
+        r = _post_chat(client, "c-old-effort", "more")
+
+    assert r.status_code == 200
+    assert built_models == [{"name": "claude-opus-5", "effort": None}]
+
+
 def test_session_reports_the_pin(
     isolated_db, built_models: list[dict[str, Any]]
 ) -> None:
