@@ -127,19 +127,27 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
 
         ``defaultModel`` is the model pinned to the most recently updated
         conversation — the last choice sticks for the next conversation —
-        falling back to the configured default when nothing is pinned yet.
-        The picker seeds itself from this field, so the carry-forward costs
-        no extra request. ``model`` (the configured default) predates the
-        picker and keeps its shape.
+        falling back to the configured default when nothing is pinned yet
+        or when the pin is no longer acceptable. The picker seeds itself
+        from this field, so the carry-forward costs no extra request.
+        ``model`` (the configured default) predates the picker and keeps
+        its shape.
         """
         model_id = agent_model()
+        # Everything served as defaultModel must pass the chat route's own
+        # validation: a pin can outlive its acceptability (the configured
+        # default moved, or its model was delisted), and serving it anyway
+        # would seed the picker with a key the creating request 400s on.
+        latest = store.latest_model()
+        if latest is None or not is_acceptable_key(latest):
+            latest = model_id
         return {
             "model": {"id": model_id, "label": label_for(model_id)},
             "models": [
                 {"key": choice.key, "label": choice.label}
                 for choice in offered_choices()
             ],
-            "defaultModel": store.latest_model() or model_id,
+            "defaultModel": latest,
         }
 
     # Handlers doing synchronous DB work are plain ``def`` so FastAPI runs
