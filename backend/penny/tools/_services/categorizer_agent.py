@@ -25,10 +25,11 @@ import uuid
 from agent_harness import Agent
 from agent_harness.core.events import InMemoryEventBus
 from agent_harness.core.models import ModelSettings
+from agent_harness.providers.google import GeminiModel
 from agent_harness.sandboxes.inprocess import InProcessSandbox
 
 from penny import observability
-from penny.agent_factory import build_model
+from penny.agent_factory import AgentModel, _thinking_budget_from_env, build_model
 from penny.config import categorizer_model
 from penny.db import get_db
 from penny.prompts import load_prompt
@@ -43,11 +44,29 @@ from penny.workspace import resolve_workspace_dir
 
 # Provider-native web_search for the agent. Passed via ``ModelSettings.builtin_tools``,
 # which the harness appends to the wire tools list alongside the function tools (so the
-# agent keeps submit_categorization etc.). The categorizer runs on Gemini
-# (``config.categorizer_model``), so we use Google's grounding tool. This coexists with
-# function calling (the JSON-output vs grounding exclusivity only applies to
-# response_mime_type, which we don't use).
+# agent keeps submit_categorization etc.). Google's grounding tool, so it is attached
+# only when the model is actually Gemini (see ``_categorizer_model_settings``). This
+# coexists with function calling (the JSON-output vs grounding exclusivity only applies
+# to response_mime_type, which we don't use).
 _GEMINI_WEB_SEARCH_TOOL: dict[str, Any] = {"google_search": {}}
+
+
+def _categorizer_model_settings(model: AgentModel) -> ModelSettings:
+    """Settings that follow the model, not the historical Gemini assumption.
+
+    ``categorizer_model()`` falls back to ``agent_model()``, so setting only
+    ``PENNY_AGENT_MODEL`` re-points the categorizer too — the settings must
+    track that. The thinking budget reuses the chat agent's dialect rule
+    (``-1`` is Gemini's "dynamic" but is rejected as ``budget_tokens`` on the
+    Anthropic-shaped OpenRouter path), and the Gemini-only grounding tool is
+    attached only when the model is actually Gemini.
+    """
+    return ModelSettings(
+        thinking_budget=_thinking_budget_from_env(model),
+        builtin_tools=(
+            [_GEMINI_WEB_SEARCH_TOOL] if isinstance(model, GeminiModel) else []
+        ),
+    )
 
 
 def _format_recent_events(events: list[dict[str, Any]]) -> str:
@@ -102,17 +121,15 @@ def build_categorizer_agent() -> Agent:
     scratch_root = resolve_workspace_dir() / "agent-runs" / run_id
     sandbox = InProcessSandbox(root=str(scratch_root))
 
+    model = build_model(name=categorizer_model())
     return Agent(
         name="categorizer",
-        model=build_model(name=categorizer_model()),
+        model=model,
         instructions=_render_categorizer_prompt(),
         session=None,
         persist_session=False,
         sandbox=sandbox,
-        model_settings=ModelSettings(
-            thinking_budget=-1,
-            builtin_tools=[_GEMINI_WEB_SEARCH_TOOL],
-        ),
+        model_settings=_categorizer_model_settings(model),
         toolsets=[build_categorizer_toolset()],
     )
 
