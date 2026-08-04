@@ -171,10 +171,19 @@ def _env_credential(
 ) -> Credential:
     """The explicit credential, or the provider's platform key from the env.
 
-    The missing-key error names both the variable and the model that needed
-    it, so a misconfigured deploy fails with the fix in the message.
+    An explicit credential must match the provider family being built: with
+    per-conversation models the family varies per request while a provisioned
+    credential does not, and handing (say) a Google key to the Anthropic
+    client would only surface as an opaque vendor 401 at request time. The
+    missing-key error names both the variable and the model that needed it,
+    so a misconfigured deploy fails with the fix in the message.
     """
     if credential is not None:
+        if credential.provider != provider:
+            raise RuntimeError(
+                f"provisioned credential is for {credential.provider!r} but "
+                f"model {model_name} needs a {provider!r} credential"
+            )
         return credential
     env_var = _ENV_KEY_BY_PROVIDER[provider]
     api_key = os.environ.get(env_var, "").strip()
