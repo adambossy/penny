@@ -31,6 +31,8 @@ from agent_harness.providers import (
     openrouter as _openrouter,
 )
 
+from .config import agent_model
+
 ProviderFamily = Literal["anthropic", "openai", "openrouter", "google"]
 """The provider families ``build_model`` dispatches on."""
 
@@ -79,9 +81,18 @@ _OFFERED: tuple[tuple[ProviderFamily, str, str, bool], ...] = (
     ("anthropic", _anthropic.SONNET_4_6, "Sonnet 4.6", True),
 )
 
+PRE_SELECTION_MODEL = "gemini-3.6-flash"
+"""What a conversation with no pinned model (NULL column) actually ran on.
+
+A fixed historical constant, deliberately NOT the configured default: every
+unpinned conversation predates model selection and ran on Gemini 3.6 Flash,
+so reporting the live default instead would relabel history the moment the
+default moves.
+"""
+
 # Models Penny no longer (or never) offers but must still label: the
 # pre-selection default every unpinned conversation actually ran on.
-_LEGACY_LABELS = {"gemini-3.6-flash": "Gemini 3.6 Flash"}
+_LEGACY_LABELS = {PRE_SELECTION_MODEL: "Gemini 3.6 Flash"}
 
 # The per-family effort tables, straight from the harness catalogue.
 _EFFORT_LEVELS_BY_FAMILY: dict[str, dict[str, tuple[Effort, ...]]] = {
@@ -137,6 +148,18 @@ def offered_choices() -> tuple[ModelChoice, ...]:
 def resolve_choice(key: str) -> ModelChoice | None:
     """The offered choice for a composite key, or ``None`` if not offered."""
     return _CHOICES_BY_KEY.get(key)
+
+
+def is_acceptable_key(key: str) -> bool:
+    """Whether a client may start a conversation on this key.
+
+    Offered choices are acceptable, and so is the configured default even
+    when unoffered: the picker seeds from ``defaultModel``, which on a fresh
+    install is the configured (unoffered) model — echoing it back must not be
+    refused. This is the chat route's whole validation rule, kept here so no
+    other front door re-derives half of it.
+    """
+    return key in _CHOICES_BY_KEY or key == agent_model()
 
 
 def parse_key(key: str) -> tuple[str, Effort | None]:
