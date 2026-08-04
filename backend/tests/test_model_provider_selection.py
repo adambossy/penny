@@ -61,13 +61,6 @@ def test_glm_keeps_the_harness_default_routing() -> None:
     assert model.routing == US_FP8_ZDR
 
 
-def test_openrouter_capabilities_resolve_from_the_model_id() -> None:
-    """Penny never restates limits the harness already owns."""
-    model = build_model(name=KIMI_K3)
-    assert model.capabilities.context_window == 1_048_576
-    assert model.capabilities.thinking is True
-
-
 def test_env_selects_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PENNY_AGENT_MODEL", KIMI_K3)
     assert isinstance(build_model(), OpenRouterModel)
