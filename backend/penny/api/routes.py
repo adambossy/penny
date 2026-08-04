@@ -18,9 +18,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
-from penny.config import agent_model
 from penny.model_selection import (
     PRE_SELECTION_MODEL,
+    configured_default,
     is_acceptable_key,
     label_for,
     offered_choices,
@@ -133,7 +133,7 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
         ``model`` (the configured default) predates the picker and keeps
         its shape.
         """
-        model_id = agent_model()
+        model_id = configured_default()
         # Everything served as defaultModel must pass the chat route's own
         # validation: a pin can outlive its acceptability (the configured
         # default moved, or its model was delisted), and serving it anyway
@@ -251,7 +251,7 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
             chat_id,
             ai_sdk_message_id=user_message_id,
             text=prompt,
-            model=selected or agent_model(),
+            model=selected or configured_default(),
         )
         prior_messages = parts_to_messages(opening.prior_messages)
         # The effective model: the pin, or the configured default for
@@ -260,7 +260,7 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
         # narrowing) must not dead-end the conversation with a 500 every
         # turn: run the bare model and drop the effort. Client-supplied
         # keys never reach here malformed — validation already 400d them.
-        pinned = opening.model or agent_model()
+        pinned = opening.model or configured_default()
         try:
             model_name, effort = parse_key(pinned)
         except ValueError:

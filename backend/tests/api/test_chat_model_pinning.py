@@ -146,6 +146,23 @@ def test_a_pin_with_a_dropped_effort_level_still_runs(
     assert built_models == [{"name": "claude-opus-5", "effort": None}]
 
 
+def test_a_typoed_configured_default_is_never_pinned(
+    isolated_db, built_models: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo'd effort suffix in PENNY_AGENT_MODEL must fail loudly, not be
+    echoed by the picker, 200, get pinned, and then silently run bare via the
+    stored-pin degrade path."""
+    monkeypatch.setenv("PENNY_AGENT_MODEL", "claude-opus-5:xhig")
+
+    with TestClient(main.app) as client:
+        with pytest.raises(ValueError, match="'xhig'"):
+            _post_chat(client, "c-typo", "hi", model="claude-opus-5:xhig")
+
+    assert built_models == []
+    with pytest.raises(ConversationAccessError):
+        ConversationStore().get_conversation("c-typo")
+
+
 def test_session_reports_the_pin(
     isolated_db, built_models: list[dict[str, Any]]
 ) -> None:
