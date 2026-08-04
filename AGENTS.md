@@ -97,10 +97,11 @@ uv run --project backend penny serve
   installs identically everywhere. To hack on it locally, per-machine:
   `uv sync --frozen && uv pip install -e ~/code/agent-harness` (re-run after
   any `uv sync`).
-- **agent-ui** live-dev is wired via `vite.config.ts` aliases (with
-  `resolve.dedupe` for react — removing it blank-screens the app from a
-  second React copy). `@penny/ui` and `@penny/chat-ui` are aliased to their
-  workspace sources the same way.
+- **agent-ui** resolves from the published npm package (`@adambossy/agent-ui`
+  in `package.json`) — the old `vite.config.ts` source alias is gone. The
+  `resolve.dedupe` for react stays as a guard against a second React copy
+  (which blank-screens the app). `@penny/ui` and `@penny/chat-ui` are still
+  aliased to their workspace sources.
 - **Backend restarts**: uvicorn `--reload` only watches `backend/` `*.py`.
   Edits to `.prompts/*.md` (lru_cached) need a manual restart.
 - Logs: `~/.penny/logs/penny.log` (loguru file sink, DEBUG).
