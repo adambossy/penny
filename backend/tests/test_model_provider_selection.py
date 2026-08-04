@@ -79,6 +79,21 @@ def test_unknown_model_raises_instead_of_falling_through() -> None:
         build_model(name="not-a-model")
 
 
+def test_explicit_credential_must_match_the_provider_family() -> None:
+    """With per-conversation models the family varies per request while a
+    provisioned credential does not — a mismatch fails at construction with
+    both names, not as an opaque vendor 401 mid-stream."""
+    from agent_harness.core.credentials import ApiKeyCredential
+
+    google_key = ApiKeyCredential(provider="google", key="test-key")
+    with pytest.raises(RuntimeError, match=r"'google'.*'anthropic'"):
+        build_model(name=OPUS_5, credential=google_key)
+    # A matching credential passes straight through.
+    anthropic_key = ApiKeyCredential(provider="anthropic", key="test-key")
+    model = build_model(name=OPUS_5, credential=anthropic_key)
+    assert isinstance(model, AnthropicMessagesModel)
+
+
 def test_kimi_k3_pins_moonshot_direct_routing() -> None:
     """Without this the default policy matches no endpoint and every call 404s."""
     model = build_model(name=KIMI_K3)
