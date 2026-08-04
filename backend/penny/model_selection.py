@@ -150,6 +150,22 @@ def resolve_choice(key: str) -> ModelChoice | None:
     return _CHOICES_BY_KEY.get(key)
 
 
+def configured_default() -> str:
+    """The configured default model key (``PENNY_AGENT_MODEL``), shape-checked.
+
+    Composite effort suffixes are new config surface, so the configured value
+    enters the selection through this one door: a malformed suffix
+    (``claude-opus-5:xhig``) raises here, naming the typo, before the value
+    can be served as ``defaultModel``, accepted by validation, or pinned.
+    Without this, a config typo would ride the stored-pin degrade path —
+    pinned permanently and silently run without effort. Stored pins keep
+    their degrade; the live config value fails fast.
+    """
+    key = agent_model()
+    parse_key(key)
+    return key
+
+
 def is_acceptable_key(key: str) -> bool:
     """Whether a client may start a conversation on this key.
 
@@ -157,9 +173,11 @@ def is_acceptable_key(key: str) -> bool:
     when unoffered: the picker seeds from ``defaultModel``, which on a fresh
     install is the configured (unoffered) model — echoing it back must not be
     refused. This is the chat route's whole validation rule, kept here so no
-    other front door re-derives half of it.
+    other front door re-derives half of it. Raises (via
+    ``configured_default``) when the configured value itself is malformed —
+    that is an operator error to surface, not a key to judge.
     """
-    return key in _CHOICES_BY_KEY or key == agent_model()
+    return key in _CHOICES_BY_KEY or key == configured_default()
 
 
 def parse_key(key: str) -> tuple[str, Effort | None]:

@@ -16,6 +16,7 @@ from agent_harness.providers import (
 import pytest
 
 from penny.model_selection import (
+    configured_default,
     is_acceptable_key,
     label_for,
     offered_choices,
@@ -84,6 +85,22 @@ def test_is_acceptable_key_accepts_offers_and_the_configured_default(
     assert is_acceptable_key("claude-opus-5:xhigh")
     assert is_acceptable_key("gemini-3.6-flash")  # the default, never offered
     assert not is_acceptable_key("claude-opus-999:xhigh")
+
+
+def test_a_typoed_configured_default_raises_naming_the_typo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Effort suffixes in config are new surface: a malformed
+    PENNY_AGENT_MODEL must fail fast at the one door it enters through —
+    not be accepted verbatim, served, pinned, and silently degraded."""
+    monkeypatch.setenv("PENNY_AGENT_MODEL", "claude-opus-5:xhig")
+    with pytest.raises(ValueError, match="'xhig'"):
+        configured_default()
+    # Offered keys never consult the default — conversations on them still
+    # validate even while the config is broken.
+    assert is_acceptable_key("claude-opus-5:xhigh")
+    with pytest.raises(ValueError, match="'xhig'"):
+        is_acceptable_key("claude-opus-5:xhig")
 
 
 def test_parse_key_splits_model_and_effort() -> None:
