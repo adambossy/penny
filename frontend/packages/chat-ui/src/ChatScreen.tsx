@@ -59,16 +59,23 @@ function useModelConfig(): ModelConfig | null {
 // turns omit it entirely (the normal case, not an error). The creating
 // request is the one carrying a single message: a draft's first send. It
 // always carries a server-reported key, never a name the client invented.
-function makeTransport(modelId: string | undefined): ChatTransport<AiUIMessage> {
+// `onCreatingSend` reports what that request actually carried (possibly
+// nothing), so the chip can reflect the truth rather than a later guess.
+function makeTransport(
+  modelId: string | undefined,
+  onCreatingSend: (modelId: string | undefined) => void,
+): ChatTransport<AiUIMessage> {
   return new DefaultChatTransport<AiUIMessage>({
     api: "/api/chat",
     prepareSendMessagesRequest: ({ id, messages }) => {
       const latest = messages[messages.length - 1];
+      const creating = messages.length === 1;
+      if (creating) onCreatingSend(modelId);
       return {
         body: {
           id,
           message: { id: latest.id, role: "user", parts: latest.parts },
-          ...(messages.length === 1 && modelId !== undefined
+          ...(creating && modelId !== undefined
             ? { selectedChatModel: modelId }
             : {}),
           selectedVisibilityType: "private",
@@ -290,14 +297,24 @@ function Chat({
   // Deriving the effective selection (below) instead of copying the default
   // into state means the picker seeds itself the moment the config lands.
   const [pickedModelId, setPickedModelId] = useState<string | undefined>(undefined);
-  // The pin wins for a conversation that has started; a draft shows the
-  // local pick, falling back to the server-reported default. Once the first
-  // send pins the pick server-side, `pickedModelId` still holds it here, so
-  // the chip keeps reporting the right model without a refetch.
-  const selectedModelId = pinnedModelId ?? pickedModelId ?? config?.defaultModelId;
+  // What the creating request actually carried, latched at send time. The
+  // config fetch can lose the race with a draft's first send: that request
+  // then carries no model (the server pins its configured default), and when
+  // the config lands the derivation below must NOT fall through to
+  // `defaultModelId` — the chip would claim a model the server never pinned.
+  // A latched `undefined` means "sent without a model" → no chip, honest.
+  const [sentModel, setSentModel] = useState<{ id: string | undefined } | null>(null);
+  // The pin wins for a conversation that has started; then whatever the
+  // creating request sent; a draft shows the local pick, falling back to the
+  // server-reported default.
+  const selectedModelId =
+    pinnedModelId ?? (sentModel ? sentModel.id : (pickedModelId ?? config?.defaultModelId));
   // Rebuilt when the selection changes (pre-first-send only); `useChat`
   // picks up the new transport without resetting the conversation.
-  const transport = useMemo(() => makeTransport(selectedModelId), [selectedModelId]);
+  const transport = useMemo(
+    () => makeTransport(selectedModelId, (id) => setSentModel({ id })),
+    [selectedModelId],
+  );
 
   const { messages, sendMessage, status, error } = useChat({
     id: sessionId,
