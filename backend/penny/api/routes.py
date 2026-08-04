@@ -255,8 +255,22 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
         )
         prior_messages = parts_to_messages(opening.prior_messages)
         # The effective model: the pin, or the configured default for
-        # conversations that predate model selection.
-        model_name, effort = parse_key(opening.model or agent_model())
+        # conversations that predate model selection. A stored pin whose
+        # effort level the harness no longer recognizes (an Effort
+        # narrowing) must not dead-end the conversation with a 500 every
+        # turn: run the bare model and drop the effort. Client-supplied
+        # keys never reach here malformed — validation already 400d them.
+        pinned = opening.model or agent_model()
+        try:
+            model_name, effort = parse_key(pinned)
+        except ValueError:
+            model_name, effort = pinned.partition(":")[0], None
+            logger.warning(
+                "pinned model key {key!r} has an unrecognized effort; "
+                "running {model!r} without one",
+                key=pinned,
+                model=model_name,
+            )
 
         session = InMemorySession(session_id=chat_id)
         if prior_messages:
