@@ -14,6 +14,8 @@ construction time — so pin them here:
 
 from __future__ import annotations
 
+from agent_harness.core.credentials import ApiKeyCredential
+from agent_harness.core.errors import ConfigError
 from agent_harness.providers.google import GeminiModel
 from agent_harness.providers.openrouter import (
     GLM_5_2,
@@ -86,3 +88,12 @@ def test_explicit_thinking_budget_wins_for_both(
     monkeypatch.setenv("PENNY_AGENT_THINKING_BUDGET", "4096")
     assert _thinking_budget_from_env(build_model(name="gemini-3.6-flash")) == 4096
     assert _thinking_budget_from_env(build_model(name=KIMI_K3)) == 4096
+
+
+def test_mismatched_explicit_credential_fails_at_construction() -> None:
+    """A gate credential minted for another provider is rejected loudly at
+    client-build time inside ``build_model`` (the harness's credential guard),
+    never as a silent per-request failure against the wrong backend."""
+    wrong_provider = ApiKeyCredential(provider="google", key="not-an-openrouter-key")
+    with pytest.raises(ConfigError, match="openrouter"):
+        build_model(name=KIMI_K3, credential=wrong_provider)
