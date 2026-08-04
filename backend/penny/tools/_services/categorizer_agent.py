@@ -50,6 +50,17 @@ from penny.workspace import resolve_workspace_dir
 # to response_mime_type, which we don't use).
 _GEMINI_WEB_SEARCH_TOOL: dict[str, Any] = {"google_search": {}}
 
+# The prompt bullet advertising web_search, filled into {{WEB_SEARCH_TOOL}} only
+# when the tool is actually attached — a model without it would otherwise be
+# told to call a tool that doesn't exist, burning turns on error ToolResults
+# for exactly the unknown-merchant cases the tool is reserved for.
+_WEB_SEARCH_PROMPT_BULLET = (
+    "- `web_search(query)` — when the merchant is unknown and you cannot infer "
+    "what it is, search the web to identify it. Sort through the search results "
+    "and make a determination based on what you find and what you know about "
+    "the spending habits of this account."
+)
+
 
 def _categorizer_model_settings(model: AgentModel) -> ModelSettings:
     """Settings that follow the model, not the historical Gemini assumption.
@@ -90,13 +101,17 @@ def _format_recent_events(events: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _render_categorizer_prompt() -> str:
+def _render_categorizer_prompt(model: AgentModel) -> str:
     """Render the categorizer agent's system prompt with live context.
 
     The taxonomy reaches the agent through a single ``{{TAXONOMY_RULES}}`` block:
     the workspace ``taxonomy-rules.md`` lists every category as ``Name (key)``
     with its definition and the cross-category decision logic. We no longer
     inject a separate hierarchy block — the keys are folded into the rules.
+
+    The advertised tool list follows the model the same way the settings do:
+    ``{{WEB_SEARCH_TOOL}}`` renders the web_search bullet only when the
+    grounding builtin is attached (Gemini), and disappears otherwise.
     """
     template = load_prompt("categorize-transaction-agent")
     taxonomy_rules = get_taxonomy_rules_loader().load()
@@ -112,6 +127,10 @@ def _render_categorizer_prompt() -> str:
     rendered = rendered.replace("{{TAXONOMY_RULES}}", taxonomy_rules)
     rendered = rendered.replace("{{MERCHANT_RULES}}", merchant_rules)
     rendered = rendered.replace("{{RECENT_EVENTS}}", recent_block)
+    rendered = rendered.replace(
+        "{{WEB_SEARCH_TOOL}}\n",
+        f"{_WEB_SEARCH_PROMPT_BULLET}\n" if isinstance(model, GeminiModel) else "",
+    )
     return rendered
 
 
@@ -125,7 +144,7 @@ def build_categorizer_agent() -> Agent:
     return Agent(
         name="categorizer",
         model=model,
-        instructions=_render_categorizer_prompt(),
+        instructions=_render_categorizer_prompt(model),
         session=None,
         persist_session=False,
         sandbox=sandbox,

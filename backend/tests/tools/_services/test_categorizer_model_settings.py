@@ -39,3 +39,43 @@ def test_openrouter_settings_drop_the_gemini_assumptions() -> None:
     settings = _categorizer_model_settings(build_model(name=KIMI_K3))
     assert settings.thinking_budget > 0
     assert settings.builtin_tools == []
+
+
+@pytest.fixture
+def _stub_prompt_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the live-context seams so rendering needs no DB or workspace."""
+    from types import SimpleNamespace
+
+    from penny.tools._services import categorizer_agent
+
+    monkeypatch.setattr(
+        categorizer_agent,
+        "get_taxonomy_rules_loader",
+        lambda: SimpleNamespace(load=lambda: "(taxonomy rules)"),
+    )
+    monkeypatch.setattr(categorizer_agent, "get_rules_loader", lambda: None)
+    monkeypatch.setattr(
+        categorizer_agent,
+        "get_db",
+        lambda: SimpleNamespace(recent_category_events=lambda limit: []),
+    )
+
+
+@pytest.mark.usefixtures("_stub_prompt_context")
+def test_gemini_prompt_advertises_web_search() -> None:
+    from penny.tools._services.categorizer_agent import _render_categorizer_prompt
+
+    rendered = _render_categorizer_prompt(build_model(name="gemini-3.6-flash"))
+    assert "`web_search(query)`" in rendered
+    assert "{{WEB_SEARCH_TOOL}}" not in rendered
+
+
+@pytest.mark.usefixtures("_stub_prompt_context")
+def test_non_gemini_prompt_omits_web_search() -> None:
+    """The prompt must not advertise a tool the model cannot call — the model
+    would burn turns on error ToolResults for exactly the hard cases."""
+    from penny.tools._services.categorizer_agent import _render_categorizer_prompt
+
+    rendered = _render_categorizer_prompt(build_model(name=KIMI_K3))
+    assert "web_search" not in rendered
+    assert "{{WEB_SEARCH_TOOL}}" not in rendered
