@@ -180,7 +180,7 @@ def _env_credential(
     api_key = os.environ.get(env_var, "").strip()
     if not api_key:
         raise RuntimeError(
-            f"{env_var} is not set (required for PENNY_AGENT_MODEL={model_name})"
+            f"{env_var} is not set (required to run model {model_name})"
         )
     return ApiKeyCredential(provider=provider, key=api_key)
 
