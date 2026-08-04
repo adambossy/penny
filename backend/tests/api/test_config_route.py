@@ -107,3 +107,28 @@ def test_default_model_carries_the_last_pinned_choice_forward(
         r = client.get("/api/config")
 
     assert r.json()["defaultModel"] == "claude-opus-5:xhigh"
+
+
+def test_default_model_is_always_acceptable_to_the_chat_route(
+    isolated_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pin can outlive its acceptability: pinned while it WAS the configured
+    default, then the default moves (or the model is delisted). Serving the
+    stale pin would seed the picker with a key the creating request 400s on —
+    config falls back to the configured default instead."""
+    from penny.api.persistence.store import ConversationStore
+    from penny.db import get_db
+
+    monkeypatch.delenv("PENNY_AGENT_MODEL", raising=False)
+    get_db().create_schema()
+    # Acceptable at pin time: it was the configured default back then.
+    ConversationStore().begin_turn(
+        "stale", ai_sdk_message_id="u1", text="a", model="gemini-3.6-flash"
+    )
+    # The configured default moves out from under the pin.
+    monkeypatch.setenv("PENNY_AGENT_MODEL", "moonshotai/kimi-k3")
+
+    with TestClient(main.app) as client:
+        r = client.get("/api/config")
+
+    assert r.json()["defaultModel"] == "moonshotai/kimi-k3"
