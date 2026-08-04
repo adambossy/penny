@@ -16,6 +16,7 @@ from agent_harness.providers import (
 import pytest
 
 from penny.model_selection import (
+    is_acceptable_key,
     label_for,
     offered_choices,
     parse_key,
@@ -71,6 +72,18 @@ def test_resolve_choice_refuses_unknown_keys() -> None:
     assert resolve_choice("claude-opus-5") is None  # effort is part of identity
     assert resolve_choice("gemini-3.6-flash") is None  # never offered
     assert resolve_choice("claude-sonnet-4-6:xhigh") is None  # vendor rejects
+
+
+def test_is_acceptable_key_accepts_offers_and_the_configured_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The chat route's whole validation rule: offered keys, plus the
+    configured default even though it is unoffered (the picker seeds from
+    ``defaultModel``, which on a fresh install is exactly that)."""
+    monkeypatch.delenv("PENNY_AGENT_MODEL", raising=False)
+    assert is_acceptable_key("claude-opus-5:xhigh")
+    assert is_acceptable_key("gemini-3.6-flash")  # the default, never offered
+    assert not is_acceptable_key("claude-opus-999:xhigh")
 
 
 def test_parse_key_splits_model_and_effort() -> None:

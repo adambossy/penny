@@ -19,7 +19,13 @@ from fastapi.responses import StreamingResponse
 from loguru import logger
 
 from penny.config import agent_model
-from penny.model_selection import label_for, offered_choices, parse_key, resolve_choice
+from penny.model_selection import (
+    PRE_SELECTION_MODEL,
+    is_acceptable_key,
+    label_for,
+    offered_choices,
+    parse_key,
+)
 
 from .app import TurnWiring
 from .bridge import _sse, stream_and_persist
@@ -36,13 +42,6 @@ _SSE_HEADERS = {
     "Cache-Control": "no-cache, no-transform",
     "Connection": "keep-alive",
 }
-
-# What a conversation with no pinned model reports: a fixed historical
-# constant, deliberately NOT agent_model(). Every unpinned conversation
-# predates model selection and actually ran on Gemini 3.6 Flash — reporting
-# the live default instead would relabel history the moment the default
-# changes.
-_PRE_SELECTION_MODEL = "gemini-3.6-flash"
 
 
 def _text_from_message(message: dict[str, Any]) -> str:
@@ -179,8 +178,8 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
             "sessionId": session_id,
             "messages": conversation_to_ui(rows),
             # The pinned model; unpinned conversations report the model they
-            # actually ran on (see _PRE_SELECTION_MODEL), not the live default.
-            "model": conversation.model or _PRE_SELECTION_MODEL,
+            # actually ran on (see PRE_SELECTION_MODEL), not the live default.
+            "model": conversation.model or PRE_SELECTION_MODEL,
         }
 
     @router.post("/plaid/exchange")
@@ -227,12 +226,11 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
         # Validate BEFORE opening the turn (and before StreamingResponse —
         # past that point errors can only be SSE frames): an unknown key is a
         # crisp 400, never a silent fall-through to some other model, and
-        # never a pinned typo. The configured default is always acceptable —
-        # it is what an empty choice means.
+        # never a pinned typo. What counts as acceptable (offered, or the
+        # configured default) is the selection's rule, not this route's.
         selected = body.get("selectedChatModel")
         if selected is not None and not (
-            isinstance(selected, str)
-            and (resolve_choice(selected) is not None or selected == agent_model())
+            isinstance(selected, str) and is_acceptable_key(selected)
         ):
             raise HTTPException(status_code=400, detail=f"unknown model: {selected!r}")
 
