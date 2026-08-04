@@ -98,10 +98,44 @@ uv run --project backend penny serve
   `uv sync --frozen && uv pip install -e ~/code/agent-harness` (re-run after
   any `uv sync`).
 - **agent-ui** resolves from the published npm package (`@adambossy/agent-ui`
-  in `package.json`) — the old `vite.config.ts` source alias is gone. The
-  `resolve.dedupe` for react stays as a guard against a second React copy
-  (which blank-screens the app). `@penny/ui` and `@penny/chat-ui` are still
-  aliased to their workspace sources.
+  in `package.json`) **by default**. The `resolve.dedupe` for react stays as a
+  guard against a second React copy (which blank-screens the app).
+  `@penny/ui` and `@penny/chat-ui` are still aliased to their workspace sources.
+
+### Working on agent-ui or agent-harness without a release
+
+Both libraries are consumed as published/pinned artifacts, so the naive loop is
+"change the library, release it, bump Penny" — untenable when iterating on an
+end-to-end behaviour. Each has a per-machine opt-in instead. Both are
+deliberately **opt-in and never automatic**: an earlier agent-ui alias switched
+on merely because `~/code/agent-ui` existed, so a developer and CI silently
+built different things. What you test must be what ships unless you have
+explicitly said otherwise.
+
+- **agent-ui** — set `PENNY_LOCAL_AGENT_UI` when starting the dev server:
+
+  ```bash
+  PENNY_LOCAL_AGENT_UI=1 npm run dev              # ~/code/agent-ui
+  PENNY_LOCAL_AGENT_UI=/path/to/agent-ui npm run dev
+  ```
+
+  Vite prints `[vite] agent-ui aliased to LOCAL source: …` when it is active —
+  if you do not see that line, you are on the published package. Tailwind also
+  scans the local checkout (`@source` lines in `src/index.css`), so a class
+  that exists only in your local source still gets generated; without that,
+  the build succeeds and the styling is silently missing.
+
+- **agent-harness** — install it editable, per-machine:
+
+  ```bash
+  uv sync --frozen && uv pip install -e ~/code/agent-harness
+  ```
+
+  Re-run the editable install after any `uv sync`, which reverts it to the
+  pinned revision.
+
+Never commit a build or lockfile produced with either override active, and do
+not point CI at them — the pinned artifact is the source of truth.
 - **Backend restarts**: uvicorn `--reload` only watches `backend/` `*.py`.
   Edits to `.prompts/*.md` (lru_cached) need a manual restart.
 - Logs: `~/.penny/logs/penny.log` (loguru file sink, DEBUG).
