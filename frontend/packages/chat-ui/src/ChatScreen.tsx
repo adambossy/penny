@@ -4,7 +4,7 @@ import { DefaultChatTransport } from "ai";
 import type { ChatTransport, UIMessage as AiUIMessage } from "ai";
 import { AlertCircle, Brain } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
-import { Message, Composer } from "@adambossy/agent-ui";
+import { Message, Composer, ToolDisplayProvider } from "@adambossy/agent-ui";
 import type { UIMessage } from "@adambossy/agent-ui";
 import { conversationPath } from "./routes";
 
@@ -270,13 +270,21 @@ export function ChatScreen({ sessionId, draft }: { sessionId: string; draft: boo
     );
   }
 
+  // Penny's tools do real, slow work — syncing, categorizing, querying — and
+  // what they did is part of the answer, not scaffolding. The library defaults
+  // to "ephemeral", where finished activity leaves no residue; "summary"
+  // collects it into an end-of-turn expandable, so a reader can check which
+  // accounts were read or which query produced a number after the fact. One
+  // provider per conversation transcript, which is what the library asks for.
   return (
-    <Chat
-      sessionId={sessionId}
-      draft={draft}
-      initialMessages={history.messages}
-      pinnedModelId={history.model}
-    />
+    <ToolDisplayProvider mode="summary">
+      <Chat
+        sessionId={sessionId}
+        draft={draft}
+        initialMessages={history.messages}
+        pinnedModelId={history.model}
+      />
+    </ToolDisplayProvider>
   );
 }
 
