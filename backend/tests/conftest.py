@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 import os
 from pathlib import Path
+import tempfile
 
 import pytest
 
@@ -11,6 +12,20 @@ import pytest
 # exceptions can't leak to the prod Sentry project. Set before importing
 # penny.api.main below, which calls init_sentry() at import.
 os.environ.setdefault("PENNY_SENTRY_ENABLED", "false")
+
+# Point the workspace at a throwaway directory so the suite never loads the
+# developer's real config.toml. `penny init` writes PENNY_DATABASE_URL there,
+# and every entrypoint applies that config as environment DEFAULTS at import —
+# so on a machine where init has run, importing the app below would set the
+# developer's database (possibly production Postgres) before any fixture gets
+# a chance to redirect it. `isolated_db` could not undo that: it sets
+# DATABASE_URL, while the config sets PENNY_DATABASE_URL, which wins.
+#
+# Same reason and same placement as the Sentry line above: it must happen
+# before `import penny.api.main`, which applies the config at import.
+os.environ.setdefault(
+    "PENNY_WORKSPACE", tempfile.mkdtemp(prefix="penny-test-workspace-")
+)
 
 import penny.api.main
 import penny.db
@@ -47,8 +62,16 @@ def _reset_singletons() -> None:
 
 @pytest.fixture
 def isolated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Point the process-wide single-player DB at a fresh tmp SQLite file."""
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'test.db'}")
+    """Point the process-wide single-player DB at a fresh tmp SQLite file.
+
+    Sets BOTH names deliberately. ``resolve_database_url`` prefers
+    ``PENNY_DATABASE_URL`` over ``DATABASE_URL``, so setting only the latter
+    leaves the fixture unable to override anything that set the former —
+    which is exactly what a workspace ``config.toml`` does.
+    """
+    url = f"sqlite:///{tmp_path / 'test.db'}"
+    monkeypatch.setenv("PENNY_DATABASE_URL", url)
+    monkeypatch.setenv("DATABASE_URL", url)
     _reset_singletons()
     yield
     _reset_singletons()
