@@ -9,7 +9,7 @@
     ".": "./src/index.ts"
   },
   "peerDependencies": {
-    "@adambossy/agent-ui": "^0.2.0",
+    "@adambossy/agent-ui": "*",
     "@ai-sdk/react": "^3.0.193",
     "@penny/ui": "*",
     "ai": "^6.0.191",
