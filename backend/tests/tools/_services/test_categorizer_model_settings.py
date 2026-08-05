@@ -22,7 +22,6 @@ from penny.tools._services.categorizer_agent import (
 
 @pytest.fixture(autouse=True)
 def _model_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("PENNY_AGENT_THINKING_BUDGET", raising=False)
     monkeypatch.setenv("GOOGLE_API_KEY", "test-google-key")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
 

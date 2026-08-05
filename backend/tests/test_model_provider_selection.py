@@ -81,12 +81,16 @@ def test_unknown_model_raises_instead_of_falling_through() -> None:
 
 def test_explicit_credential_must_match_the_provider_family() -> None:
     """With per-conversation models the family varies per request while a
-    provisioned credential does not — a mismatch fails at construction with
-    both names, not as an opaque vendor 401 mid-stream."""
+    provisioned credential does not — a mismatch fails at construction naming
+    both providers, not as an opaque vendor 401 mid-stream.
+
+    The guard is the harness's, deliberately not duplicated in Penny: a local
+    check would only preempt the library's clearer error with our own.
+    """
     from agent_harness.core.credentials import ApiKeyCredential
 
     google_key = ApiKeyCredential(provider="google", key="test-key")
-    with pytest.raises(RuntimeError, match=r"'google'.*'anthropic'"):
+    with pytest.raises(ConfigError, match=r"'google'.*'anthropic'"):
         build_model(name=OPUS_5, credential=google_key)
     # A matching credential passes straight through.
     anthropic_key = ApiKeyCredential(provider="anthropic", key="test-key")

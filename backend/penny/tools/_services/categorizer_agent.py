@@ -29,7 +29,7 @@ from agent_harness.providers.google import GeminiModel
 from agent_harness.sandboxes.inprocess import InProcessSandbox
 
 from penny import observability
-from penny.agent_factory import AgentModel, _thinking_budget_from_env, build_model
+from penny.agent_factory import AgentModel, _thinking_budget_for, build_model
 from penny.config import categorizer_model
 from penny.db import get_db
 from penny.prompts import load_prompt
@@ -73,7 +73,7 @@ def _categorizer_model_settings(model: AgentModel) -> ModelSettings:
     attached only when the model is actually Gemini.
     """
     return ModelSettings(
-        thinking_budget=_thinking_budget_from_env(model),
+        thinking_budget=_thinking_budget_for(model),
         builtin_tools=(
             [_GEMINI_WEB_SEARCH_TOOL] if isinstance(model, GeminiModel) else []
         ),
