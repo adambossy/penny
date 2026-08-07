@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs";
 
 // Frontend dev server proxies /api/* to the Python backend so the browser
 // talks to a single origin (no CORS) and cookies/streaming pass through.
@@ -23,16 +24,26 @@ const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
 //   PENNY_LOCAL_AGENT_UI=/path/to/agent-ui npm run dev
 //
 // Never commit a build made with this set.
-const LOCAL_AGENT_UI = process.env.PENNY_LOCAL_AGENT_UI;
-const agentUiSrc =
-  LOCAL_AGENT_UI && LOCAL_AGENT_UI !== "0"
-    ? path.resolve(
-        LOCAL_AGENT_UI === "1"
-          ? path.join(os.homedir(), "code/agent-ui/packages/agent-ui")
-          : LOCAL_AGENT_UI,
-        "src",
-      )
-    : null;
+function resolveAgentUiSrc(value: string | undefined): string | null {
+  if (!value || value === "0") return null;
+  const base = value === "1" ? path.join(os.homedir(), "code/agent-ui") : path.resolve(value);
+  // Accept the repo root OR the package root. The docs show the repo root, but
+  // a worktree path is naturally the package root, and silently aliasing at a
+  // tree that isn't there is the failure this override exists to avoid.
+  const pkg = path.join(base, "packages", "agent-ui");
+  const src = path.join(fs.existsSync(path.join(pkg, "src")) ? pkg : base, "src");
+  if (!fs.existsSync(src)) {
+    // Opting in explicitly and getting the published package anyway is the
+    // worst outcome: you debug a change that was never loaded. Fail instead.
+    throw new Error(
+      `PENNY_LOCAL_AGENT_UI=${value} does not resolve to an agent-ui source tree ` +
+        `(looked for ${src}). Point it at the repo root or the package root.`,
+    );
+  }
+  return src;
+}
+
+const agentUiSrc = resolveAgentUiSrc(process.env.PENNY_LOCAL_AGENT_UI);
 
 if (agentUiSrc) {
   // Loud on purpose: a silent alias is how the last one drifted unnoticed.
