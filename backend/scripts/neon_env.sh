@@ -17,10 +17,11 @@ PROTECTED_BRANCHES=("production" "penny-test")
 # Default workspace mirrors penny.workspace.resolve_workspace_dir: ~/.penny,
 # unless only the legacy ~/.transactoid exists.
 _PENNY_WORKSPACE_DEFAULT="$HOME/.penny"
-if [ ! -e "$_PENNY_WORKSPACE_DEFAULT" ] && [ -e "$HOME/.transactoid" ]; then
+if [ ! -d "$_PENNY_WORKSPACE_DEFAULT" ] && [ -d "$HOME/.transactoid" ]; then
   _PENNY_WORKSPACE_DEFAULT="$HOME/.transactoid"
 fi
 PENNY_ENV_TEST_FILE="${PENNYDB_ENV_FILE:-${PENNY_WORKSPACE:-$_PENNY_WORKSPACE_DEFAULT}/env.test}"
+unset _PENNY_WORKSPACE_DEFAULT
 
 # Project-scoped neonctl invocation, e.g.: "${NEON[@]}" branches list
 NEON=(neonctl --org-id "$ORG_ID" --project-id "$PROJECT_ID")
