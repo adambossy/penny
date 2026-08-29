@@ -14,7 +14,12 @@ from typing import Any
 
 from agent_harness import tool
 
-from penny.services.email import EmailService, SMTPConfig
+from penny.services.email import (
+    DEFAULT_FROM_ADDRESS,
+    DEFAULT_FROM_NAME,
+    EmailService,
+    SMTPConfig,
+)
 from penny.tools._services.uploader import upload_artifact
 
 
@@ -50,7 +55,7 @@ def _build_email_service() -> EmailService:
     (Gmail rewrites From to the authenticated account regardless).
     """
     provider = os.environ.get("EMAIL_PROVIDER", "smtp").strip().lower()
-    from_name = os.environ.get("EMAIL_FROM_NAME", "Penny Reports")
+    from_name = os.environ.get("EMAIL_FROM_NAME", DEFAULT_FROM_NAME)
     if provider == "smtp":
         from_address = os.environ.get("EMAIL_FROM") or os.environ.get(
             "SMTP_USERNAME", ""
@@ -69,7 +74,7 @@ def _build_email_service() -> EmailService:
             from_name=from_name,
             smtp_config=smtp_config,
         )
-    from_address = os.environ.get("EMAIL_FROM", "reports@penny.com")
+    from_address = os.environ.get("EMAIL_FROM", DEFAULT_FROM_ADDRESS)
     return EmailService(
         provider="resend", from_address=from_address, from_name=from_name
     )

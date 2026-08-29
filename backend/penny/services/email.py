@@ -34,14 +34,18 @@ class EmailResult:
     error: str | None
 
 
+DEFAULT_FROM_ADDRESS = "reports@penny.com"
+DEFAULT_FROM_NAME = "Penny Reports"
+
+
 class EmailService:
     """Email service using Resend API or SMTP."""
 
     def __init__(
         self,
         api_key: str | None = None,
-        from_address: str = "reports@penny.com",
-        from_name: str = "Penny Reports",
+        from_address: str = DEFAULT_FROM_ADDRESS,
+        from_name: str = DEFAULT_FROM_NAME,
         *,
         provider: str = "resend",
         smtp_config: SMTPConfig | None = None,
