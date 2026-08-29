@@ -4,7 +4,7 @@
     "penny-system-prompt": {
       "source_file": ".prompts/penny-system-prompt/12.md",
       "version_dir": ".prompts/penny-system-prompt",
-      "last_hash": "sha256:82ecfe0d2466d70b1b0e6508e056e08fc7779d4c4c8fd21030a54112d8b3c1ed",
+      "last_hash": "sha256:e765470e47846ab6d00c7550bd4bdff6c27d8eafb2bcd152419a43e11a937d28",
       "last_version": 12
     },
     "categorize-transactions": {

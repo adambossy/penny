@@ -1,6 +1,6 @@
 ---
 name: edit-merchant-rules-memory
-description: Edit the merchant categorization rules stored in memory/merchant-rules.md so future syncs apply the same categorization automatically.
+description: Edit the merchant categorization rules stored in the workspace's memory/merchant-rules.md so future syncs apply the same categorization automatically.
 when_to_use: When the user asks to add, update, or remove a merchant rule, codify how a merchant should be categorized, or correct an incorrect categorization for a specific merchant.
 ---
 
@@ -38,7 +38,7 @@ Before creating or updating a rule:
 
 2. **Check for duplicates**: Review existing rules to avoid redundancy
    ```bash
-   cat memory/merchant-rules.md | grep -i "<merchant_pattern>"
+   grep -i "<merchant_pattern>" memory/merchant-rules.md
    ```
 
 3. **Format correctly**: Follow the exact rule format from memory/index.md
@@ -130,4 +130,4 @@ Always confirm the operation with:
 - **Taxonomy validation is mandatory**: Never add a rule with an invalid category key
 - **Rules are case-insensitive**: Patterns match descriptors case-insensitively
 - **Auto-verification**: Transactions matching rules are automatically marked as verified
-- **Workspace files**: Memory files live in `memory/` under the workspace (`~/.penny`; override with `PENNY_WORKSPACE`)
+- **Workspace files**: Memory files live in `memory/`; paths are relative to the workspace root, where the filesystem and `bash` tools are rooted

@@ -12,7 +12,7 @@ The taxonomy rules document is the natural-language guide the categorizer
 agent reads when it chooses a category. It lives in the workspace:
 
 ```
-$PENNY_WORKSPACE/memory/taxonomy-rules.md      (default: ~/.penny/memory/taxonomy-rules.md)
+memory/taxonomy-rules.md      (relative to the workspace root)
 ```
 
 It does two jobs:
@@ -92,7 +92,7 @@ Rebuild the whole document:
    routine adaptations; do escalate a real semantic contradiction between an
    existing decision and the migration's intent.
 
-Write the result to `$PENNY_WORKSPACE/memory/taxonomy-rules.md` as plain
+Write the result to `memory/taxonomy-rules.md` as plain
 Markdown.
 
 For both targeted edits and full regeneration, as a final pass, be sure to review
