@@ -3,7 +3,7 @@
 The Plaid Link flow currently runs locally on ``https://localhost:8443``
 and pops the user's browser via ``webbrowser.open``. This works for dev on
 the maintainer's machine but is incompatible with a remote sandbox — the
-productionization plan ([[productionize-penny]] B-6) covers
+productionization plan ([[productionize-transactoid]] B-6) covers
 re-architecting the OAuth callback through a centralized public endpoint.
 """
 
