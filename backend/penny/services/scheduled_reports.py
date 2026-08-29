@@ -11,8 +11,8 @@ about a job, both in New-York wall-clock time:
   The daemon records the identity it last resolved, so "already handled
   this period" survives restarts and laptop sleep without slot arithmetic.
 
-:func:`report_prompt` turns a job's period into a natural-language request
-that triggers the period-parameterized ``spending-report`` skill. There are
+:func:`report_prompt` turns a job into a natural-language request that
+triggers the period-parameterized ``spending-report`` skill. There are
 intentionally no ``report-*`` promptorium keys: the skill is the single
 source of report logic, so the periods cannot drift apart.
 """
@@ -85,22 +85,21 @@ def is_due_today(job: dict[str, Any], *, now_utc: datetime | None = None) -> boo
     elif period == "monthly":
         day_matches = now_ny.day == int(job["day_of_month"])
     elif period == "annual":
-        day_matches = now_ny.month == int(job["month"]) and now_ny.day == int(
-            job["day_of_month"]
-        )
+        month_matches = now_ny.month == int(job["month"])
+        day_matches = month_matches and now_ny.day == int(job["day_of_month"])
     else:
         raise ValueError(f"unknown report period: {period!r}")
     return day_matches and now_ny.hour >= int(job["hour"])
 
 
-def period_window(job: dict[str, Any]) -> str:
+def _period_window(job: dict[str, Any]) -> str:
     """The content window the report should cover, as prompt-ready English."""
     if job["period"] == "every_n_days":
         return f"the last {int(job['n'])} days"
     return _WINDOWS[job["period"]]
 
 
-def report_prompt(period: str, window: str) -> str:
+def report_prompt(job: dict[str, Any]) -> str:
     """Natural-language request that triggers the ``spending-report`` skill.
 
     Names the period and window explicitly so the skill resolves the right
@@ -111,6 +110,8 @@ def report_prompt(period: str, window: str) -> str:
     named here). Without the explicit "email it to me", a scheduled run would
     generate the report but never send it (exit 0, no email).
     """
+    period = job["period"]
+    window = _period_window(job)
     if period == "every_n_days":
         return f"Generate my spending report covering {window} and email it to me."
     return f"Generate my {period} spending report covering {window} and email it to me."

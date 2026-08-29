@@ -158,7 +158,6 @@ def run_scheduled_report(
     from penny.services.scheduled_reports import (
         NEW_YORK_TZ,
         period_identity,
-        period_window,
         report_prompt,
     )
     from penny.settings import load_jobs
@@ -175,15 +174,12 @@ def run_scheduled_report(
 
     now_utc = datetime.now(UTC)
     now_ny = now_utc.astimezone(NEW_YORK_TZ)
-    identity = period_identity(job_config, now_utc=now_utc)
-    window = period_window(job_config)
     typer.echo(
         f"Running report job {job!r}: period={job_config['period']} "
-        f"identity={identity} ({now_ny:%Y-%m-%d %H:%M:%S %Z})"
+        f"identity={period_identity(job_config, now_utc=now_utc)} "
+        f"({now_ny:%Y-%m-%d %H:%M:%S %Z})"
     )
-    prompt_text = _build_prompt(
-        prompt=report_prompt(job_config["period"], window), prompt_key=None
-    )
+    prompt_text = _build_prompt(prompt=report_prompt(job_config), prompt_key=None)
     _run_and_exit(prompt_text=prompt_text, max_turns=max_turns)
 
 
@@ -311,7 +307,6 @@ def init() -> None:
         k: str(v) for k, v in (existing.get("env") or {}).items()
     }
     prior_schedule = {**SCHEDULE_DEFAULTS, **(existing.get("schedule") or {})}
-    has_prior_jobs = bool(existing.get("jobs"))
 
     def ask(key: str, prompt: str, *, default: str = "", secret: bool = False) -> None:
         """Prompt for one env value, defaulting to the stored answer."""
@@ -389,21 +384,25 @@ def init() -> None:
     # The wizard configures one weekly report job (YAGNI: more jobs are a
     # hand-edit, not a UI). A config that already carries [[jobs]] is kept
     # verbatim so re-running init never clobbers a hand-tuned schedule.
-    if has_prior_jobs:
-        jobs = load_jobs()
+    configured_jobs = load_jobs()  # the stored [[jobs]], or the weekly default
+    if existing.get("jobs"):
+        jobs = configured_jobs
     else:
+        weekly = configured_jobs[0]
         jobs = [
             {
-                "name": "weekly",
-                "period": "weekly",
+                **weekly,
                 "weekday": int(
-                    typer.prompt("Weekly report weekday (1=Mon … 7=Sun)", default="1")
+                    typer.prompt(
+                        "Weekly report weekday (1=Mon … 7=Sun)",
+                        default=str(weekly["weekday"]),
+                    )
                 ),
                 "hour": int(
-                    typer.prompt("Weekly report hour (local, 0-23)", default="8")
+                    typer.prompt(
+                        "Weekly report hour (local, 0-23)", default=str(weekly["hour"])
+                    )
                 ),
-                "recipients": None,  # fall through to PENNY_REPORT_RECIPIENTS
-                "priority": 1,
             }
         ]
     path = write_config(prior_env, schedule, jobs)
