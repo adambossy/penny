@@ -20,7 +20,7 @@ fresh (sync every 12 h) and emails you a weekly spending report.
 
 ```bash
 # 1. Install (repo checkout for now)
-git clone https://github.com/adambossy/penny penny && cd penny
+git clone https://github.com/adambossy/penny && cd penny
 uv sync --frozen
 (cd frontend && npm install && npm run build)
 
