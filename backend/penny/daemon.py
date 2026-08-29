@@ -96,24 +96,56 @@ def _report_state_key(name: str) -> str:
     return f"report:{name}"
 
 
+def _report_is_due(
+    state: dict[str, Any], job: dict[str, Any], now_utc: datetime
+) -> bool:
+    """Calendar gate open AND this occurrence of the period not yet resolved.
+
+    A failed send never records the identity, so the job stays due on the next
+    tick — success (or cap-suppression) is what advances a job.
+    """
+    if not is_due_today(job, now_utc=now_utc):
+        return False
+    recorded = state.get(_report_state_key(job["name"]), {}).get("last_resolved_period")
+    return recorded != period_identity(job, now_utc=now_utc)
+
+
 def _due_reports(
     state: dict[str, Any], now_utc: datetime, jobs: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """The jobs due this tick, highest priority first.
+    """The jobs due this tick, highest priority first (ties keep config order)."""
+    due = [job for job in jobs if _report_is_due(state, job, now_utc)]
+    return sorted(due, key=lambda job: job["priority"], reverse=True)
 
-    Due = calendar gate open AND the current period identity is not the one
-    last resolved. A failed send never records the identity, so it stays due
-    on the next tick — success (or cap-suppression) is what advances a job.
-    """
-    due = [
-        job
-        for job in jobs
-        if is_due_today(job, now_utc=now_utc)
-        and state.get(_report_state_key(job["name"]), {}).get("last_resolved_period")
-        != period_identity(job, now_utc=now_utc)
-    ]
-    due.sort(key=lambda job: job["priority"], reverse=True)
-    return due
+
+def _send_report(state: dict[str, Any], job: dict[str, Any], now_utc: datetime) -> None:
+    """Run one report job as a subprocess; only a success spends its period."""
+    key = _report_state_key(job["name"])
+    recipients = job.get("recipients")
+    extra_env = (
+        {"PENNY_REPORT_RECIPIENTS": ",".join(recipients)} if recipients else None
+    )
+    ok = _run_job(
+        state,
+        key,
+        ["run-scheduled-report", "--job", job["name"]],
+        extra_env=extra_env,
+    )
+    if ok:
+        state[key]["last_resolved_period"] = period_identity(job, now_utc=now_utc)
+        write_state(state)
+
+
+def _resolve_without_sending(
+    state: dict[str, Any], job: dict[str, Any], now_utc: datetime, detail: str
+) -> None:
+    """Spend a job's current period without running it (cap suppression)."""
+    state[_report_state_key(job["name"])] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "ok": True,
+        "detail": detail,
+        "last_resolved_period": period_identity(job, now_utc=now_utc),
+    }
 
 
 def _tick_reports(
@@ -131,35 +163,17 @@ def _tick_reports(
     due = _due_reports(state, now_utc, jobs)
     winners, suppressed = due[:max_emails_per_day], due[max_emails_per_day:]
     for job in winners:
-        key = _report_state_key(job["name"])
-        extra_env = (
-            {"PENNY_REPORT_RECIPIENTS": ",".join(job["recipients"])}
-            if job.get("recipients")
-            else None
-        )
-        ok = _run_job(
-            state,
-            key,
-            ["run-scheduled-report", "--job", job["name"]],
-            extra_env=extra_env,
-        )
-        if ok:
-            state[key]["last_resolved_period"] = period_identity(job, now_utc=now_utc)
-            write_state(state)
-    if suppressed:
-        winner_names = ", ".join(job["name"] for job in winners)
-        for job in suppressed:
-            key = _report_state_key(job["name"])
-            state[key] = {
-                "last_run_at": datetime.now(UTC).isoformat(),
-                "ok": True,
-                "detail": (
-                    f"resolved without sending: suppressed by "
-                    f"max_emails_per_day={max_emails_per_day} ({winner_names} won)"
-                ),
-                "last_resolved_period": period_identity(job, now_utc=now_utc),
-            }
-        write_state(state)
+        _send_report(state, job, now_utc)
+    if not suppressed:
+        return
+    detail = (
+        f"resolved without sending: suppressed by "
+        f"max_emails_per_day={max_emails_per_day} "
+        f"({', '.join(job['name'] for job in winners)} won)"
+    )
+    for job in suppressed:
+        _resolve_without_sending(state, job, now_utc, detail)
+    write_state(state)
 
 
 def run_daemon() -> None:
