@@ -30,34 +30,29 @@ _CONFIG_NAME = "config.toml"
 # load_schedule and write_config so the wizard and the daemon can't disagree.
 SCHEDULE_DEFAULTS: dict[str, int] = {
     "sync_interval_hours": 12,
-    # At most this many report-job emails per calendar day; when several jobs
-    # come due together the highest-priority one wins the slot.
+    # Cap on the report emails sent in one scheduling pass: when several jobs
+    # come due together the highest-priority ones win and the rest resolve
+    # without sending — so, in practice, at most this many a day.
     "max_emails_per_day": 1,
 }
 
-# What a fresh workspace runs before anyone edits [[jobs]]: one weekly report,
-# Monday 08:00 local. recipients=None means "leave PENNY_REPORT_RECIPIENTS to
-# the ambient environment" (the wizard-stored [env] default).
-DEFAULT_JOBS: list[dict[str, Any]] = [
-    {
-        "name": "weekly",
-        "period": "weekly",
-        "weekday": 1,
-        "hour": 8,
-        "recipients": None,
-        "priority": 1,
-    }
-]
+# The common fields every job carries, with their defaults.
+_JOB_DEFAULTS: dict[str, Any] = {"period": "weekly", "hour": 8, "priority": 1}
 
-# Which cadence fields each period type carries (beyond the common
-# name/period/hour/recipients/priority) — drives both parsing and writing.
-_PERIOD_CADENCE_FIELDS: dict[str, tuple[str, ...]] = {
-    "daily": (),
-    "weekly": ("weekday",),
-    "monthly": ("day_of_month",),
-    "annual": ("month", "day_of_month"),
-    "every_n_days": ("n",),
+# The cadence fields each period type carries on top of those, with the
+# default used when a hand-edited entry omits one — drives parsing and writing.
+_PERIOD_CADENCE_FIELDS: dict[str, dict[str, int]] = {
+    "daily": {},
+    "weekly": {"weekday": 1},  # ISO weekday: 1=Mon … 7=Sun
+    "monthly": {"day_of_month": 1},
+    "annual": {"month": 1, "day_of_month": 1},
+    "every_n_days": {"n": 7},
 }
+
+# What a fresh workspace runs before anyone edits [[jobs]]: one weekly report
+# in the default slot (Monday 08:00 local), addressed to whatever
+# PENNY_REPORT_RECIPIENTS holds. _normalize_job fills in the rest.
+DEFAULT_JOBS: list[dict[str, Any]] = [{"name": "weekly", "period": "weekly"}]
 
 
 def config_path() -> Path:
@@ -111,39 +106,43 @@ def load_schedule() -> dict[str, Any]:
     }
 
 
+def _toml_string(value: str) -> str:
+    """One TOML basic string, quoted and escaped."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def _normalize_job(raw: dict[str, Any]) -> dict[str, Any]:
     """Coerce one [[jobs]] entry into the shape the daemon consumes.
 
-    Hand-edited TOML is the expected authoring surface, so be tolerant about
-    types (ints arrive as ints, but normalize anyway) while keeping the field
-    set explicit. ``recipients`` collapses to None when absent/empty so the
+    Hand-edited TOML is the expected authoring surface, so be tolerant: types
+    are coerced and an omitted field falls back to its default. The result is
+    total — every field the period needs is present — so nothing downstream
+    has to guess. ``recipients`` collapses to None when absent/empty so the
     job falls back to the ambient PENNY_REPORT_RECIPIENTS.
     """
-    period = str(raw.get("period", "weekly"))
+    period = str(raw.get("period", _JOB_DEFAULTS["period"]))
+    recipients: list[str] = []
+    if isinstance(raw.get("recipients"), list):
+        recipients = [str(r).strip() for r in raw["recipients"] if str(r).strip()]
     job: dict[str, Any] = {
         "name": str(raw.get("name") or period),
         "period": period,
-        "hour": int(raw.get("hour", 8)),
-        "priority": int(raw.get("priority", 1)),
-        "recipients": None,
+        "hour": int(raw.get("hour", _JOB_DEFAULTS["hour"])),
+        "priority": int(raw.get("priority", _JOB_DEFAULTS["priority"])),
+        "recipients": recipients or None,
     }
-    recipients = raw.get("recipients")
-    if isinstance(recipients, list):
-        cleaned = [str(r).strip() for r in recipients if str(r).strip()]
-        job["recipients"] = cleaned or None
-    for field in _PERIOD_CADENCE_FIELDS.get(period, ()):
-        if field in raw:
-            job[field] = int(raw[field])
+    for field, default in _PERIOD_CADENCE_FIELDS.get(period, {}).items():
+        job[field] = int(raw.get(field, default))
     return job
 
 
 def load_jobs() -> list[dict[str, Any]]:
     """The configured report jobs, or the single weekly default when unset."""
     raw = load_config().get("jobs")
-    if not isinstance(raw, list):
-        raw = []
-    jobs = [_normalize_job(entry) for entry in raw if isinstance(entry, dict)]
-    return jobs or [dict(job) for job in DEFAULT_JOBS]
+    entries = raw if isinstance(raw, list) else []
+    configured = [job for job in entries if isinstance(job, dict)]
+    return [_normalize_job(job) for job in configured or DEFAULT_JOBS]
 
 
 def write_config(
@@ -153,35 +152,34 @@ def write_config(
 ) -> Path:
     """Write config.toml (chmod 600 — it holds secrets). Returns the path.
 
-    Only the fields relevant to each job's period are emitted; a None
-    ``recipients`` is skipped entirely so the job keeps falling through to
-    the environment's PENNY_REPORT_RECIPIENTS.
+    Each job goes out through :func:`_normalize_job`, so what is written is
+    exactly what :func:`load_jobs` will read back: only the fields relevant to
+    the job's period, and no ``recipients`` line at all when it is None (the
+    job keeps falling through to the environment's PENNY_REPORT_RECIPIENTS).
     """
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["# Penny workspace configuration — written by `penny init`.", ""]
     lines.append("[env]")
     for key in sorted(env):
-        value = env[key].replace("\\", "\\\\").replace('"', '\\"')
-        lines.append(f'{key} = "{value}"')
+        lines.append(f"{key} = {_toml_string(env[key])}")
     lines += ["", "[schedule]"]
     lines += [
         f"{key} = {int(schedule.get(key, default))}"
         for key, default in SCHEDULE_DEFAULTS.items()
     ]
-    for job in jobs if jobs is not None else DEFAULT_JOBS:
+    for raw_job in DEFAULT_JOBS if jobs is None else jobs:
+        job = _normalize_job(raw_job)
         lines += ["", "[[jobs]]"]
-        lines.append(f'name = "{job["name"]}"')
-        lines.append(f'period = "{job["period"]}"')
-        for field in _PERIOD_CADENCE_FIELDS.get(job["period"], ()):
-            if job.get(field) is not None:
-                lines.append(f"{field} = {int(job[field])}")
-        lines.append(f"hour = {int(job.get('hour', 8))}")
-        recipients = job.get("recipients")
-        if recipients:
-            quoted = ", ".join(f'"{addr}"' for addr in recipients)
+        lines.append(f"name = {_toml_string(job['name'])}")
+        lines.append(f"period = {_toml_string(job['period'])}")
+        for field in _PERIOD_CADENCE_FIELDS.get(job["period"], {}):
+            lines.append(f"{field} = {job[field]}")
+        lines.append(f"hour = {job['hour']}")
+        if job["recipients"]:
+            quoted = ", ".join(_toml_string(addr) for addr in job["recipients"])
             lines.append(f"recipients = [{quoted}]")
-        lines.append(f"priority = {int(job.get('priority', 1))}")
+        lines.append(f"priority = {job['priority']}")
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
     path.chmod(stat.S_IRUSR | stat.S_IWUSR)

@@ -14,7 +14,6 @@ import pytest
 from penny.services.scheduled_reports import (
     is_due_today,
     period_identity,
-    period_window,
     report_prompt,
 )
 
@@ -111,36 +110,25 @@ def test_is_due_today_fires_for_the_rest_of_the_day() -> None:
 
 
 @pytest.mark.parametrize(
-    "job,expected_window",
+    "period,expected_window",
     [
-        ({"period": "daily"}, "today"),
-        ({"period": "weekly"}, "this week"),
-        ({"period": "monthly"}, "this month"),
-        ({"period": "annual"}, "this year"),
-        ({"period": "every_n_days", "n": 2}, "the last 2 days"),
+        ("daily", "today"),
+        ("weekly", "this week"),
+        ("monthly", "this month"),
+        ("annual", "this year"),
     ],
 )
-def test_period_window(job: dict, expected_window: str) -> None:
-    assert period_window(job) == expected_window
-
-
-@pytest.mark.parametrize("period", ["daily", "weekly", "monthly", "annual"])
-def test_report_prompt_names_period_and_asks_for_email(period: str) -> None:
-    windows = {
-        "daily": "today",
-        "weekly": "this week",
-        "monthly": "this month",
-        "annual": "this year",
-    }
-
+def test_report_prompt_names_period_and_window(
+    period: str, expected_window: str
+) -> None:
     # act
-    output = report_prompt(period, windows[period])
+    output = report_prompt({"period": period})
 
     # expected: names the period + window for the spending-report skill, and
     # explicitly asks for email delivery — the skill only calls
     # send_email_report when the request asks (see commit 1696ebf).
     expected_output = (
-        f"Generate my {period} spending report covering {windows[period]} "
+        f"Generate my {period} spending report covering {expected_window} "
         "and email it to me."
     )
 
@@ -148,9 +136,9 @@ def test_report_prompt_names_period_and_asks_for_email(period: str) -> None:
     assert output == expected_output
 
 
-def test_report_prompt_every_n_days_uses_the_window() -> None:
+def test_report_prompt_every_n_days_spells_out_the_window() -> None:
     # act
-    output = report_prompt("every_n_days", "the last 2 days")
+    output = report_prompt({"period": "every_n_days", "n": 2})
 
     # assert: no awkward "every_n_days" in the prose, still asks for email.
     assert output == (
