@@ -5,6 +5,8 @@ The workspace directory holds user-specific runtime data: ``memory/``,
 ``penny.settings``). The default location is ``~/.penny``; an existing
 ``~/.transactoid`` (the prior product name) is honored so old user state
 carries over without migration. Override with ``$PENNY_WORKSPACE``.
+The same default-plus-fallback rule is mirrored in shell by
+``backend/scripts/neon_env.sh``; change or retire them together.
 """
 
 from __future__ import annotations
