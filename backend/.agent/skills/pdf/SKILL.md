@@ -237,7 +237,7 @@ Amounts range from $3.50 to $1,240.00. Ready to pass to categorisation pipeline.
 For generated PDFs:
 
 ```
-Saved spending-report.pdf (3 pages, 48 KB) to ~/Documents/reports/.
+Saved spending-report.pdf (3 pages, 48 KB) to reports/.
 ```
 
 ## Quick Reference
