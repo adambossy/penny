@@ -34,6 +34,7 @@ dist/
 .claude/worktrees/
 
 # Local Penny workspace clone (versioned separately in penny-workspace)
+.penny/
 .transactoid/
 
 # Plaid Link localhost HTTPS certs
