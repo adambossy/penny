@@ -1,0 +1,158 @@
+"""Period identity, calendar gates, and prompt text for report jobs.
+
+The identity string is the daemon's memory of "already handled this period";
+these tests pin its shape per period type, the New-York day attribution, and
+the every_n_days bucketing (stable within a bucket, rolls after n days).
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pytest
+
+from penny.services.scheduled_reports import (
+    is_due_today,
+    period_identity,
+    period_window,
+    report_prompt,
+)
+
+
+def _at(iso: str) -> datetime:
+    """Build an aware UTC datetime from an ISO string."""
+    return datetime.fromisoformat(iso).replace(tzinfo=UTC)
+
+
+# Saturday 2026-08-29, noon in New York (16:00 UTC during EDT).
+_SATURDAY_NOON = _at("2026-08-29T16:00:00")
+
+
+@pytest.mark.parametrize(
+    "job,expected_identity",
+    [
+        ({"period": "daily"}, "2026-08-29"),
+        ({"period": "weekly", "weekday": 6}, "2026-W35"),
+        ({"period": "monthly", "day_of_month": 29}, "2026-08"),
+        ({"period": "annual", "month": 8, "day_of_month": 29}, "2026"),
+        # (2026-08-29 - 2026-01-01) = 240 days -> bucket 240 // 2.
+        ({"period": "every_n_days", "n": 2}, "120"),
+    ],
+)
+def test_period_identity_per_period_type(job: dict, expected_identity: str) -> None:
+    # act
+    output = period_identity(job, now_utc=_SATURDAY_NOON)
+
+    # assert
+    assert output == expected_identity
+
+
+def test_period_identity_uses_new_york_calendar_day() -> None:
+    # input: 2026-01-01 02:00 UTC is still 2025-12-31 21:00 in New York, so
+    # both the daily and annual identities belong to the OLD period.
+    now_utc = _at("2026-01-01T02:00:00")
+
+    # assert
+    assert period_identity({"period": "daily"}, now_utc=now_utc) == "2025-12-31"
+    assert period_identity({"period": "annual"}, now_utc=now_utc) == "2025"
+
+
+def test_every_n_days_identity_is_stable_then_rolls_after_n_days() -> None:
+    # input
+    job = {"period": "every_n_days", "n": 2}
+
+    # act: same date twice, the next day (same bucket), then day n
+    same = period_identity(job, now_utc=_SATURDAY_NOON)
+    again = period_identity(job, now_utc=_SATURDAY_NOON)
+    next_day = period_identity(job, now_utc=_at("2026-08-30T16:00:00"))
+    after_n = period_identity(job, now_utc=_at("2026-08-31T16:00:00"))
+
+    # assert: deterministic across calls, unchanged within the bucket,
+    # different once n days have elapsed.
+    assert same == again == next_day == "120"
+    assert after_n == "121"
+
+
+def test_unknown_period_raises() -> None:
+    with pytest.raises(ValueError):
+        period_identity({"period": "fortnightly"}, now_utc=_SATURDAY_NOON)
+    with pytest.raises(ValueError):
+        is_due_today({"period": "fortnightly", "hour": 8}, now_utc=_SATURDAY_NOON)
+
+
+@pytest.mark.parametrize(
+    "job,expected_due",
+    [
+        # daily / every_n_days: the day gate is always open (identity carries
+        # the cadence); only the hour gates.
+        ({"period": "daily", "hour": 8}, True),
+        ({"period": "daily", "hour": 13}, False),
+        ({"period": "every_n_days", "n": 3, "hour": 8}, True),
+        # weekly: 2026-08-29 is a Saturday (ISO weekday 6).
+        ({"period": "weekly", "weekday": 6, "hour": 8}, True),
+        ({"period": "weekly", "weekday": 1, "hour": 8}, False),
+        # monthly: day 29.
+        ({"period": "monthly", "day_of_month": 29, "hour": 8}, True),
+        ({"period": "monthly", "day_of_month": 1, "hour": 8}, False),
+        # annual: Aug 29.
+        ({"period": "annual", "month": 8, "day_of_month": 29, "hour": 8}, True),
+        ({"period": "annual", "month": 1, "day_of_month": 1, "hour": 8}, False),
+    ],
+)
+def test_is_due_today_calendar_and_hour_gates(job: dict, expected_due: bool) -> None:
+    assert is_due_today(job, now_utc=_SATURDAY_NOON) is expected_due
+
+
+def test_is_due_today_fires_for_the_rest_of_the_day() -> None:
+    # The gate is >= hour, not == hour: a laptop opened at 22:00 still runs
+    # the 08:00 job that day (the identity check stops repeats).
+    late = _at("2026-08-30T02:00:00")  # 22:00 Saturday in New York
+    assert is_due_today({"period": "daily", "hour": 8}, now_utc=late)
+
+
+@pytest.mark.parametrize(
+    "job,expected_window",
+    [
+        ({"period": "daily"}, "today"),
+        ({"period": "weekly"}, "this week"),
+        ({"period": "monthly"}, "this month"),
+        ({"period": "annual"}, "this year"),
+        ({"period": "every_n_days", "n": 2}, "the last 2 days"),
+    ],
+)
+def test_period_window(job: dict, expected_window: str) -> None:
+    assert period_window(job) == expected_window
+
+
+@pytest.mark.parametrize("period", ["daily", "weekly", "monthly", "annual"])
+def test_report_prompt_names_period_and_asks_for_email(period: str) -> None:
+    windows = {
+        "daily": "today",
+        "weekly": "this week",
+        "monthly": "this month",
+        "annual": "this year",
+    }
+
+    # act
+    output = report_prompt(period, windows[period])
+
+    # expected: names the period + window for the spending-report skill, and
+    # explicitly asks for email delivery — the skill only calls
+    # send_email_report when the request asks (see commit 1696ebf).
+    expected_output = (
+        f"Generate my {period} spending report covering {windows[period]} "
+        "and email it to me."
+    )
+
+    # assert
+    assert output == expected_output
+
+
+def test_report_prompt_every_n_days_uses_the_window() -> None:
+    # act
+    output = report_prompt("every_n_days", "the last 2 days")
+
+    # assert: no awkward "every_n_days" in the prose, still asks for email.
+    assert output == (
+        "Generate my spending report covering the last 2 days and email it to me."
+    )

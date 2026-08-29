@@ -1,14 +1,13 @@
 """Unit tests for the headless Typer CLI front door.
 
-Covers the scheduled-report selection precedence (pure date logic) and a
-smoke test that ``_run_and_exit`` constructs the agent through the real
-``build_agent`` seam and maps the run outcome to an exit code — with the
-model, email, and network fully stubbed (no live run).
+Covers ``run-scheduled-report --job`` resolution against the configured
+``[[jobs]]`` and a smoke test that ``_run_and_exit`` constructs the agent
+through the real ``build_agent`` seam and maps the run outcome to an exit
+code — with the model, email, and network fully stubbed (no live run).
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,73 +15,71 @@ import pytest
 import typer
 
 from penny import cli
-from penny.services.scheduled_reports import report_prompt, select_report_period
+
+_JOBS = [
+    {"name": "daily", "period": "daily", "hour": 8, "recipients": None, "priority": 1},
+    {
+        "name": "weekly",
+        "period": "weekly",
+        "weekday": 1,
+        "hour": 8,
+        "recipients": None,
+        "priority": 2,
+    },
+]
 
 
-def _at(iso: str) -> datetime:
-    """Build an aware UTC datetime from an ISO string."""
-    return datetime.fromisoformat(iso).replace(tzinfo=UTC)
+def _patch_jobs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Stub the configured jobs and capture what the command runs with.
+
+    ``load_jobs`` is imported lazily inside the command from ``penny.settings``
+    and the run itself goes through ``_run_and_exit``; patch both seams.
+    """
+    import penny.settings as settings
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(settings, "load_jobs", lambda: [dict(j) for j in _JOBS])
+    monkeypatch.setattr(
+        cli,
+        "_run_and_exit",
+        lambda *, prompt_text, max_turns: captured.update(
+            prompt=prompt_text, max_turns=max_turns
+        ),
+    )
+    return captured
 
 
-@pytest.mark.parametrize(
-    "now_iso,expected_period",
-    [
-        # 2026-01-01 12:00 UTC is still Jan 1 in New York -> annual.
-        ("2026-01-01T12:00:00", "annual"),
-        # 2026-03-01 12:00 UTC is the 1st in NY -> monthly.
-        ("2026-03-01T12:00:00", "monthly"),
-        # 2026-06-14 is a Sunday -> weekly.
-        ("2026-06-14T12:00:00", "weekly"),
-        # 2026-06-11 is a Thursday -> daily.
-        ("2026-06-11T12:00:00", "daily"),
-        # Jan 1 wins over the day-1 / weekday checks (precedence).
-        ("2026-01-01T12:00:00", "annual"),
-    ],
-)
-def test_select_report_period_precedence(now_iso: str, expected_period: str) -> None:
+def test_run_scheduled_report_picks_the_named_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # input
-    now_utc = _at(now_iso)
+    captured = _patch_jobs(monkeypatch)
 
     # act
-    output = select_report_period(now_utc=now_utc)
+    cli.run_scheduled_report(job="weekly", max_turns=3)
 
-    # expected
-    expected_output = expected_period
-
-    # assert
-    assert output == expected_output
-
-
-def test_select_report_period_ny_day_boundary_uses_local_calendar() -> None:
-    # input: 2026-01-01 02:00 UTC is still 2025-12-31 21:00 in New York,
-    # so the annual rule must NOT fire (it is not yet Jan 1 locally).
-    now_utc = _at("2026-01-01T02:00:00")
-
-    # act
-    output = select_report_period(now_utc=now_utc)
-
-    # expected: Dec 31 2025 is a Wednesday -> daily.
-    expected_output = "daily"
-
-    # assert
-    assert output == expected_output
-
-
-@pytest.mark.parametrize("period", ["daily", "weekly", "monthly", "annual"])
-def test_report_prompt_triggers_skill_for_period(period: str) -> None:
-    # act
-    output = report_prompt(period)
-
-    # expected: a natural-language request that names the period and the
-    # spending-report skill (so the agent loads the skill, no prompt key), and
-    # asks for email delivery (the skill only sends when the request asks).
-    expected_output = (
-        f"Generate my {period} spending report for the current period and "
-        "email it to me."
+    # expected: the weekly job's period + window drive the prompt, which
+    # still explicitly asks for email delivery (commit 1696ebf).
+    expected_prompt = (
+        "Generate my weekly spending report covering this week and email it to me."
     )
 
     # assert
-    assert output == expected_output
+    assert captured == {"prompt": expected_prompt, "max_turns": 3}
+
+
+def test_run_scheduled_report_unknown_job_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # input
+    captured = _patch_jobs(monkeypatch)
+
+    # act / assert: unknown name exits non-zero without driving the agent
+    with pytest.raises(typer.Exit) as exc_info:
+        cli.run_scheduled_report(job="fortnightly", max_turns=3)
+
+    assert exc_info.value.exit_code == 1
+    assert captured == {}
 
 
 def test_build_prompt_does_not_embed_recipients() -> None:

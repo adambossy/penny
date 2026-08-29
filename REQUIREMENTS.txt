@@ -38,14 +38,26 @@ P3. Conversational finance Q&A
     streaming chat UI, driving the agent over the user's own data.
 
 P4. Scheduled reports & the daemon
-    Deliver a recurring weekly spending report by email, produced by the same
-    agent that powers chat and sent via its own email tool over the user's
-    configured SMTP. Scheduled work (sync every N hours, the weekly report)
-    is run by a local daemon (`penny daemon`) installed as a user service at
-    onboarding; `penny serve --all-in-one` co-runs it for casual use. Job
-    state (last run, outcome) is inspectable via `penny daemon status` and
-    the agent's `sync_status` tool. Report recipients come from configuration
-    only — never from the prompt or the model.
+    Deliver recurring emailed spending reports, produced by the same agent
+    that powers chat and sent via its own email tool over the user's
+    configured SMTP. Report jobs are configured as a list in the workspace
+    config.toml ([[jobs]]): each names a period (daily / weekly / monthly /
+    annual / every_n_days), a calendar slot (New-York local time), its own
+    recipient list, and a priority. Scheduling is period-identity based, not
+    slot based: a job is due once per occurrence of its period, so a slot
+    missed while the machine sleeps still runs later the same period. Of the
+    jobs due on one tick, the highest-priority max_emails_per_day send; the
+    rest resolve their current period without sending — after an outage only
+    the top still-due job fires, never a backfill. A failed send retries on
+    the next tick (only success or cap-suppression advances a job's period).
+    Scheduled work (sync every N hours plus the report jobs) is run by a
+    local daemon (`penny daemon`) installed as a user service at onboarding;
+    `penny serve --all-in-one` co-runs it for casual use. Job state (last
+    run, outcome, last resolved period) is inspectable via `penny daemon
+    status` and the agent's `sync_status` tool. Report recipients come from
+    configuration only — per job via [[jobs]] (injected into the job
+    subprocess's environment by the daemon) or the PENNY_REPORT_RECIPIENTS
+    default — never from the prompt or the model.
 
 P5. Amazon itemization
     Optionally enrich Amazon transactions by scraping order detail so spending
