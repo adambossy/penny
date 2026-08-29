@@ -69,7 +69,7 @@ def _build_email_service() -> EmailService:
             from_name=from_name,
             smtp_config=smtp_config,
         )
-    from_address = os.environ.get("EMAIL_FROM", "reports@transactoid.com")
+    from_address = os.environ.get("EMAIL_FROM", "reports@penny.com")
     return EmailService(
         provider="resend", from_address=from_address, from_name=from_name
     )

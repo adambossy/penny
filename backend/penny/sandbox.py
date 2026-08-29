@@ -1,7 +1,7 @@
 """Per-process workspace sandbox.
 
 One ``InProcessSandbox`` rooted at the user's workspace directory
-(``~/.transactoid`` by default). Tools that need filesystem or shell access
+(``~/.penny`` by default). Tools that need filesystem or shell access
 read this singleton.
 """
 

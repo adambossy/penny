@@ -41,7 +41,7 @@ class EmailService:
         self,
         api_key: str | None = None,
         from_address: str = "reports@penny.com",
-        from_name: str = "Transactoid Reports",
+        from_name: str = "Penny Reports",
         *,
         provider: str = "resend",
         smtp_config: SMTPConfig | None = None,
@@ -242,9 +242,9 @@ class EmailService:
         Returns:
             EmailResult with success status
         """
-        subject = "Transactoid Report Failed"
+        subject = "Penny Report Failed"
 
-        text_content = f"""Transactoid Report Generation Failed
+        text_content = f"""Penny Report Generation Failed
 
 Error: {error}
 
@@ -257,7 +257,7 @@ Please check the Fly.io logs for more details.
         html_content = f"""
 <html>
 <body>
-<h1>Transactoid Report Generation Failed</h1>
+<h1>Penny Report Generation Failed</h1>
 
 <h2>Error</h2>
 <pre>{error}</pre>

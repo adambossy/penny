@@ -94,7 +94,7 @@ per `.env`).
 
 ```bash
 set -a && source .env.test && set +a                          # DATABASE_URL -> test branch (access tokens)
-eval "$(grep -E '^PLAID_' ~/code/transactoid/.env | sed 's/^/export /')"   # PLAID_* creds
+eval "$(grep -E '^PLAID_' ~/code/penny/.env | sed 's/^/export /')"   # PLAID_* creds
 uv run python scripts/inspect_venmo_plaid.py
 ```
 

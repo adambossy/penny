@@ -19,7 +19,7 @@ Handle all PDF operations that arise in a personal-finance workflow:
 - **Ingest**: extract transaction rows, balances, and dates from PDF bank or
   credit-card statements so they can be fed into the categorisation pipeline.
 - **Generate**: produce downloadable PDF reports from the markdown or HTML
-  reports that Transactoid generates (complement to the `render-report-html`
+  reports that Penny generates (complement to the `render-report-html`
   skill).
 - **Manipulate**: merge multiple monthly statements into one archive, split
   large PDFs, rotate or clean up scanned pages.
@@ -71,7 +71,7 @@ For `merge` operations also gather:
 ## Dependencies
 
 `pdfplumber` is a **bundled project dependency** — it is always available in the
-transactoid virtualenv without any installation step. Import it directly:
+penny virtualenv without any installation step. Import it directly:
 
 ```python
 import pdfplumber
@@ -188,7 +188,7 @@ Only invoke OCR after confirming `pdfplumber` returns blank or near-blank text.
    `tools/ingest/adapters/`, or create a minimal ad-hoc mapping:
 
    ```python
-   from transactoid.tools.ingest.adapters.base import NormalizedTransaction
+   from penny.tools.ingest.adapters.base import NormalizedTransaction
    from datetime import date
 
    tx = NormalizedTransaction(
@@ -220,7 +220,7 @@ Before returning results:
 2. **Row count sanity** — parsed transaction count should be plausible for the
    date range (warn if zero or suspiciously low).
 3. **Amount normalisation** — all amounts are floats; credits (inflows) are
-   negative, debits (outflows) are positive (Transactoid convention).
+   negative, debits (outflows) are positive (Penny convention).
 4. **No source file overwritten** — output path differs from input path.
 5. **Sensitive data** — do not echo full account numbers in confirmations;
    mask to last four digits.
@@ -268,6 +268,6 @@ Saved spending-report.pdf (3 pages, 48 KB) to ~/Documents/reports/.
 > User: "Export my monthly spending report as a PDF."
 
 1. Obtain the rendered HTML/markdown from the agent.
-2. Build a `reportlab` PDF matching the Transactoid report style.
+2. Build a `reportlab` PDF matching the Penny report style.
 3. Save to `reports/spending-YYYY-MM.pdf`.
 4. Confirm: "Saved spending-2025-01.pdf (2 pages) to reports/."

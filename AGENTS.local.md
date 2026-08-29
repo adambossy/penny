@@ -38,7 +38,7 @@ Deploy is a **fifth segregated domain** alongside the four above (the agent-harn
 ## Env files across worktrees
 
 `backend/.env` and `frontend/.env` live only in the primary checkout
-(`~/code/transactoid`) and are the single source of truth. The `WorktreeCreate`
+(`~/code/penny`) and are the single source of truth. The `WorktreeCreate`
 hook (`~/.claude/hooks/create-worktree-with-env.sh`) **symlinks** them (and any
 other gitignored `*.env`, e.g. `backend/.env.test`) into every new worktree, so
 a secret edited once is live everywhere. The hook creates empty placeholders in

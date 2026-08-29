@@ -14,7 +14,7 @@ The fixture is a gzipped tar bundling two things, because the categorizer reads
 - ``fixture.sqlite`` — the categorizer-reachable tables, copied table-by-table
   through the shared SQLAlchemy models (NOT pg_dump, so types/constraints stay
   dialect-correct).
-- ``merchant-rules.md`` — the merchant-rules prompt block (``~/.transactoid/
+- ``merchant-rules.md`` — the merchant-rules prompt block (``~/.penny/
   memory/merchant-rules.md``). Snapshotting it makes backtests reproducible:
   without it a backtest would run against *today's* rules, not the run's.
 
