@@ -30,7 +30,7 @@ A taxonomy migration touches multiple layers. The `migrate_taxonomy` tool handle
 | `memory/merchant-rules.md` | - | Yes (via `edit-merchant-rules-memory` skill) |
 | `configs/merchant-rules.md` | - | Yes |
 | `configs/taxonomy.yaml` | - | Yes |
-| `$PENNY_WORKSPACE/memory/taxonomy-rules.md` | - | Yes (via `generate-taxonomy-rules` skill) |
+| `memory/taxonomy-rules.md` | - | Yes (via `generate-taxonomy-rules` skill) |
 | `memory/budget.md` | - | Regenerate if affected (via `generate-budget` skill) |
 
 ## Workflow
@@ -129,7 +129,7 @@ Replace old category keys with new ones in any matching rules.
 ### Step 5: Regenerate the taxonomy rules
 
 Use the `generate-taxonomy-rules` skill to update
-`$PENNY_WORKSPACE/memory/taxonomy-rules.md` so its category definitions and
+`memory/taxonomy-rules.md` so its category definitions and
 decision logic match the new taxonomy. Tell that skill what this migration
 changed (and why) so it can reconcile the carried-over decision logic — where
 the existing decisions conflict with this migration, the migration takes
@@ -163,7 +163,7 @@ Run verification queries to confirm the migration is complete:
 
 3. **No stale references in config files**:
    ```bash
-   grep -r "<old_key>" configs/ "${PENNY_WORKSPACE:-$HOME/.penny}/memory/"
+   grep -r "<old_key>" configs/ memory/
    ```
 
 4. **Report results to user**: transaction count moved, merchant rules updated, config files changed.
@@ -178,13 +178,13 @@ Run verification queries to confirm the migration is complete:
 4. Remove entry from `configs/taxonomy.yaml`
 5. Use `edit-merchant-rules-memory` skill to update `memory/merchant-rules.md`
 6. Update `configs/merchant-rules.md` (Julia nanny rule -> `childcare.care`)
-7. Regenerate `$PENNY_WORKSPACE/memory/taxonomy-rules.md` via the `generate-taxonomy-rules` skill (drop the merged category's definition; fix any references to it in the decision-logic sections)
+7. Regenerate `memory/taxonomy-rules.md` via the `generate-taxonomy-rules` skill (drop the merged category's definition; fix any references to it in the decision-logic sections)
 8. Verify: 0 transactions remain on old key, no stale references
 
 ## Important Notes
 
 - **Always present impact before executing**: Taxonomy changes can affect many transactions and downstream artifacts.
 - **Two merchant-rules files exist**: `configs/merchant-rules.md` (checked in) and `memory/merchant-rules.md` (agent memory). Both must be updated.
-- **Taxonomy rules live in the workspace**: regenerate `$PENNY_WORKSPACE/memory/taxonomy-rules.md` via the `generate-taxonomy-rules` skill, not the codebase prompts.
+- **Taxonomy rules live in the workspace**: regenerate `memory/taxonomy-rules.md` via the `generate-taxonomy-rules` skill, not the codebase prompts.
 - **Budget becomes stale**: After any migration affecting budgeted categories, regenerate using the `generate-budget` skill.
 - **`configs/taxonomy.yaml` is not auto-synced**: The migration tool operates on the database. Always update the YAML to keep it in sync.
