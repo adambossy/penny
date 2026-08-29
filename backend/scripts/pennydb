@@ -15,7 +15,7 @@
 #   pennydb prod url [--role <name>]   print prod URL (resolved live)
 #   pennydb selftest                   offline checks, no network
 #
-# Test credentials come from ~/.transactoid/env.test (written by
+# Test credentials come from ~/.penny/env.test (written by
 # `pennydb test refresh`, shared across worktrees). Prod credentials are
 # resolved live from neonctl and never written to disk.
 #

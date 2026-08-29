@@ -11,7 +11,7 @@ Two tiers:
 - **Agent path** — everything else runs the agent loop.
 
 The agent is built WITHOUT filesystem/bash/skills tools (capability confinement) and
-runs in-process with its own per-run scratch sandbox under ``~/.transactoid``.
+runs in-process with its own per-run scratch sandbox under ``~/.penny``.
 """
 
 from __future__ import annotations

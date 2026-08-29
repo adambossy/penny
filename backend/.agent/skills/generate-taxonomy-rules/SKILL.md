@@ -12,7 +12,7 @@ The taxonomy rules document is the natural-language guide the categorizer
 agent reads when it chooses a category. It lives in the workspace:
 
 ```
-$PENNY_WORKSPACE/memory/taxonomy-rules.md      (default: ~/.transactoid/memory/taxonomy-rules.md)
+$PENNY_WORKSPACE/memory/taxonomy-rules.md      (default: ~/.penny/memory/taxonomy-rules.md)
 ```
 
 It does two jobs:

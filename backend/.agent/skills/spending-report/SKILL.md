@@ -50,7 +50,7 @@ practical:
 ## Step 3 — Budget context (optional)
 
 Check whether `memory/budget.md` exists (filesystem/`bash` tools, workspace
-`~/.transactoid`). It stores **monthly** figures. If present, derive the period
+`~/.penny`). It stores **monthly** figures. If present, derive the period
 target per the table (weekly ÷ 4.33, monthly ×1, annual ×12; daily ÷ 30.4 if a
 daily target is useful) and include budget-vs-actual columns. If absent, omit all
 budget comparisons.

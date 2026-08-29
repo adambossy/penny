@@ -14,7 +14,13 @@ PROTECTED_BRANCHES=("production" "penny-test")
 
 # The per-machine env file the dev loop and pennydb read the test-branch
 # DATABASE_URL from. Lives in the workspace so every worktree shares it.
-PENNY_ENV_TEST_FILE="${PENNYDB_ENV_FILE:-${PENNY_WORKSPACE:-$HOME/.transactoid}/env.test}"
+# Default workspace mirrors penny.workspace.resolve_workspace_dir: ~/.penny,
+# unless only the legacy ~/.transactoid exists.
+_PENNY_WORKSPACE_DEFAULT="$HOME/.penny"
+if [ ! -e "$_PENNY_WORKSPACE_DEFAULT" ] && [ -e "$HOME/.transactoid" ]; then
+  _PENNY_WORKSPACE_DEFAULT="$HOME/.transactoid"
+fi
+PENNY_ENV_TEST_FILE="${PENNYDB_ENV_FILE:-${PENNY_WORKSPACE:-$_PENNY_WORKSPACE_DEFAULT}/env.test}"
 
 # Project-scoped neonctl invocation, e.g.: "${NEON[@]}" branches list
 NEON=(neonctl --org-id "$ORG_ID" --project-id "$PROJECT_ID")

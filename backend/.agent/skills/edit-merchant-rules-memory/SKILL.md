@@ -1,6 +1,6 @@
 ---
 name: edit-merchant-rules-memory
-description: Edit the merchant categorization rules stored in ~/.transactoid/memory/merchant-rules.md so future syncs apply the same categorization automatically.
+description: Edit the merchant categorization rules stored in memory/merchant-rules.md so future syncs apply the same categorization automatically.
 when_to_use: When the user asks to add, update, or remove a merchant rule, codify how a merchant should be categorized, or correct an incorrect categorization for a specific merchant.
 ---
 
@@ -8,7 +8,7 @@ when_to_use: When the user asks to add, update, or remove a merchant rule, codif
 
 ## Purpose
 
-Edit the merchant categorization rules stored in `~/.transactoid/memory/merchant-rules.md` using shell-based file operations. This skill enables the agent to create, update, or remove merchant rules that map specific merchant descriptors to taxonomy categories.
+Edit the merchant categorization rules stored in `memory/merchant-rules.md` using shell-based file operations. This skill enables the agent to create, update, or remove merchant rules that map specific merchant descriptors to taxonomy categories.
 
 ## When to Use
 
@@ -38,23 +38,23 @@ Before creating or updating a rule:
 
 2. **Check for duplicates**: Review existing rules to avoid redundancy
    ```bash
-   cat ~/.transactoid/memory/merchant-rules.md | grep -i "<merchant_pattern>"
+   cat memory/merchant-rules.md | grep -i "<merchant_pattern>"
    ```
 
-3. **Format correctly**: Follow the exact rule format from ~/.transactoid/memory/index.md
+3. **Format correctly**: Follow the exact rule format from memory/index.md
 
 ## Shell Editing Workflow
 
 ### Read Current Rules
 
 ```bash
-cat ~/.transactoid/memory/merchant-rules.md
+cat memory/merchant-rules.md
 ```
 
 ### Append New Rule
 
 ```bash
-cat >> ~/.transactoid/memory/merchant-rules.md << 'EOF'
+cat >> memory/merchant-rules.md << 'EOF'
 
 ## Rule: <rule_name>
 - **Category:** `<category_key>`
@@ -68,13 +68,13 @@ EOF
 First, identify the line numbers of the rule to update:
 
 ```bash
-grep -n "## Rule: <rule_name>" ~/.transactoid/memory/merchant-rules.md
+grep -n "## Rule: <rule_name>" memory/merchant-rules.md
 ```
 
 Then use sed to replace specific lines or patterns:
 
 ```bash
-sed -i '' 's/old_pattern/new_pattern/' ~/.transactoid/memory/merchant-rules.md
+sed -i '' 's/old_pattern/new_pattern/' memory/merchant-rules.md
 ```
 
 Or manually edit specific sections by reading, modifying, and rewriting.
@@ -83,7 +83,7 @@ Or manually edit specific sections by reading, modifying, and rewriting.
 
 ```bash
 # Use sed to delete the rule block (requires start and end markers)
-sed -i '' '/## Rule: <rule_name>/,/^$/d' ~/.transactoid/memory/merchant-rules.md
+sed -i '' '/## Rule: <rule_name>/,/^$/d' memory/merchant-rules.md
 ```
 
 ## Validation After Edit
@@ -92,7 +92,7 @@ After any edit operation:
 
 1. **Read back the file** to confirm changes:
    ```bash
-   cat ~/.transactoid/memory/merchant-rules.md
+   cat memory/merchant-rules.md
    ```
 
 2. **Verify format**: Check that markdown structure is preserved
@@ -130,4 +130,4 @@ Always confirm the operation with:
 - **Taxonomy validation is mandatory**: Never add a rule with an invalid category key
 - **Rules are case-insensitive**: Patterns match descriptors case-insensitively
 - **Auto-verification**: Transactions matching rules are automatically marked as verified
-- **Workspace files**: Memory files live in `~/.transactoid/memory/` (configurable via `TRANSACTOID_WORKSPACE`)
+- **Workspace files**: Memory files live in `memory/` under the workspace (`~/.penny`; override with `PENNY_WORKSPACE`)

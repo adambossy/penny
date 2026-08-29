@@ -1,6 +1,6 @@
 ---
 name: recategorize-merchant
-description: Recategorize all transactions for a merchant via the recategorize_merchant tool and persist a matching rule in ~/.transactoid/memory/merchant-rules.md.
+description: Recategorize all transactions for a merchant via the recategorize_merchant tool and persist a matching rule in memory/merchant-rules.md.
 when_to_use: When the user asks to recategorize a merchant, change which category a merchant maps to, or fix systematically wrong categorizations for a specific merchant across all their transactions.
 ---
 
@@ -8,7 +8,7 @@ when_to_use: When the user asks to recategorize a merchant, change which categor
 
 ## Purpose
 
-Recategorize all transactions for a merchant and persist the rule in `.transactoid/memory/merchant-rules.md` so future syncs apply the same categorization automatically.
+Recategorize all transactions for a merchant and persist the rule in `memory/merchant-rules.md` so future syncs apply the same categorization automatically.
 
 ## When to Use
 
@@ -62,16 +62,16 @@ This updates all **unverified** transactions for that merchant. Verified transac
 
 ### Step 4: Persist the rule in memory
 
-After successful recategorization, check if a rule already exists for this merchant in `.transactoid/memory/merchant-rules.md`:
+After successful recategorization, check if a rule already exists for this merchant in `memory/merchant-rules.md`:
 
 ```bash
-grep -i "<merchant_name>" .transactoid/memory/merchant-rules.md
+grep -i "<merchant_name>" memory/merchant-rules.md
 ```
 
 **If no existing rule**, append a new one:
 
 ```bash
-cat >> .transactoid/memory/merchant-rules.md << 'EOF'
+cat >> memory/merchant-rules.md << 'EOF'
 
 ## Rule: <Rule Name>
 - **Category:** `<category_key>`
@@ -111,7 +111,7 @@ Report:
 1. Queries merchants table for "Jubilee Market" -> finds merchant_id=42
 2. Validates `food_and_dining.groceries` is a valid taxonomy key
 3. Calls `recategorize_merchant(merchant_id=42, category_key="food_and_dining.groceries")`
-4. Checks `.transactoid/memory/merchant-rules.md` for existing Jubilee Market rule
+4. Checks `memory/merchant-rules.md` for existing Jubilee Market rule
 5. Appends or updates the rule with patterns from raw transaction descriptors
 6. Confirms: "Recategorized 8 transactions for Jubilee Market to food_and_dining.groceries. Saved rule for future syncs."
 

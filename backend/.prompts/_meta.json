@@ -4,7 +4,7 @@
     "penny-system-prompt": {
       "source_file": ".prompts/penny-system-prompt/12.md",
       "version_dir": ".prompts/penny-system-prompt",
-      "last_hash": "sha256:55fec5f1107a7167ab81abf1112116d315dc01c880bf3fd021082a60475a21c7",
+      "last_hash": "sha256:82ecfe0d2466d70b1b0e6508e056e08fc7779d4c4c8fd21030a54112d8b3c1ed",
       "last_version": 12
     },
     "categorize-transactions": {
@@ -16,7 +16,7 @@
     "generate-memory-index": {
       "source_file": ".prompts/generate-memory-index/2.md",
       "version_dir": ".prompts/generate-memory-index",
-      "last_hash": "sha256:6a48d23044f3cfadc088c2cb408b17ffcf6ec42c619451c1f9d17c8cc44d2322",
+      "last_hash": "sha256:e503e167cb9adbaf29d5e4a2bd9a5e22487ae43718917d4b1dd3a7b86869d4a4",
       "last_version": 2
     },
     "report-md-to-html": {
@@ -28,7 +28,7 @@
     "report-weekly-jenny": {
       "source_file": ".prompts/report-weekly-jenny/3.md",
       "version_dir": ".prompts/report-weekly-jenny",
-      "last_hash": "sha256:46c959833625f086b9fe986902635070ef0c2c37b23a2b144279c744d67f28ec",
+      "last_hash": "sha256:5b12a194889907ba0bc61ff8c650b01c73551b61edaa6d225d2ac0efab1a01a4",
       "last_version": 3
     },
     "sql-directives-postgresql": {

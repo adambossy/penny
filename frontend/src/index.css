@@ -33,7 +33,7 @@
    @source paths are relative to THIS file, so the depth depends on where the
    checkout sits. One line per known layout, since Tailwind ignores a path that
    does not resolve (and none of them resolve in CI, which is the point):
-     3 — the primary checkout, ~/code/transactoid
+     3 — the primary checkout, ~/code/penny
      6 — a worktree at .claude/worktrees/<name>
      7 — a worktree at .claude/worktrees/<group>/<name>
    A layout not listed here still builds; it just won't generate classes that

@@ -1,7 +1,7 @@
 """Mirror loguru output to a rotating log file under the workspace.
 
 Loguru ships with a stderr sink; this module adds a file sink at
-``~/.transactoid/logs/penny.log`` (or wherever ``PENNY_WORKSPACE`` points)
+``~/.penny/logs/penny.log`` (or wherever ``PENNY_WORKSPACE`` points)
 alongside it. Importing this module is the install — it's idempotent, so
 multiple imports are harmless.
 """
