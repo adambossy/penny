@@ -63,8 +63,8 @@ def _assemble_agent_memory(workspace_dir: Path | None = None) -> str:
     Reads ``index.md`` then ``merchant-rules.md`` (joined with blank lines);
     empty string if neither exists. With ``workspace_dir`` (the per-run hybrid
     checkout, phase 1b) it reads ``<workspace_dir>/memory``; without it, the
-    legacy ``~/.transactoid/memory`` — kept so scripts/tests with no checkout
-    still resolve memory.
+    process-wide workspace's ``memory/`` (``resolve_memory_dir``) — kept so
+    scripts/tests with no checkout still resolve memory.
     """
     from .workspace import resolve_memory_dir
 
