@@ -32,7 +32,7 @@ from typing import Any
 
 from loguru import logger
 
-from penny.daemon_state import read_state, write_state
+from penny.daemon_state import REPORT_STATE_PREFIX, read_state, write_state
 from penny.service_install import penny_argv
 from penny.services.scheduled_reports import is_due_today, period_identity
 from penny.settings import load_jobs, load_schedule
@@ -81,7 +81,7 @@ def _due_sync(state: dict[str, Any], now: datetime, interval_hours: int) -> bool
 
 def _report_state_key(name: str) -> str:
     """Report jobs are namespaced in state so they can never shadow "sync"."""
-    return f"report:{name}"
+    return f"{REPORT_STATE_PREFIX}{name}"
 
 
 def _report_is_due(
