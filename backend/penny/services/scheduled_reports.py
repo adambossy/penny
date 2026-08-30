@@ -102,14 +102,30 @@ def report_prompt(job: dict[str, Any]) -> str:
     emailed report, and the recipient is resolved from configuration (never
     named here). Without the explicit "email it to me", a scheduled run would
     generate the report but never send it (exit 0, no email).
+
+    Also states plainly that this is an unattended run: a scheduled run has
+    been observed asking a clarifying question about stale data ("shall I
+    sync now?") and ending its turn there — with no one to answer, that is a
+    silent failure indistinguishable from success (non-empty output, exit
+    0). The agent must resolve staleness itself (sync, then fall back to the
+    most recent available period with a note) rather than ask.
     """
     period = job["period"]
+    guardrail = (
+        " This is an unattended scheduled run — there is no one available "
+        "to answer a question, so do not ask for confirmation or wait for "
+        "a reply. If the current period has no data yet, sync first; if "
+        "data is still stale afterward, report on the most recent "
+        "available period instead and note the staleness. Always finish "
+        "by generating and emailing a report — never end by asking a "
+        "question."
+    )
     if period == "every_n_days":
         return (
             f"Generate my spending report covering the last {int(job['n'])} days "
-            "and email it to me."
+            f"and email it to me.{guardrail}"
         )
     return (
         f"Generate my {period} spending report covering {_WINDOWS[period]} "
-        "and email it to me."
+        f"and email it to me.{guardrail}"
     )

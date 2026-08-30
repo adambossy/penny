@@ -124,12 +124,21 @@ def test_report_prompt_names_period_and_window(
     # act
     output = report_prompt({"period": period})
 
-    # expected: names the period + window for the spending-report skill, and
+    # expected: names the period + window for the spending-report skill,
     # explicitly asks for email delivery — the skill only calls
-    # send_email_report when the request asks (see commit 1696ebf).
+    # send_email_report when the request asks (see commit 1696ebf) — and
+    # states this is unattended so the agent resolves stale data itself
+    # instead of asking a question no one will answer (an observed run
+    # asked "shall I sync now?" and silently never sent).
     expected_output = (
         f"Generate my {period} spending report covering {expected_window} "
-        "and email it to me."
+        "and email it to me. This is an unattended scheduled run — there "
+        "is no one available to answer a question, so do not ask for "
+        "confirmation or wait for a reply. If the current period has no "
+        "data yet, sync first; if data is still stale afterward, report "
+        "on the most recent available period instead and note the "
+        "staleness. Always finish by generating and emailing a report — "
+        "never end by asking a question."
     )
 
     # assert
@@ -140,7 +149,15 @@ def test_report_prompt_every_n_days_spells_out_the_window() -> None:
     # act
     output = report_prompt({"period": "every_n_days", "n": 2})
 
-    # assert: no awkward "every_n_days" in the prose, still asks for email.
+    # assert: no awkward "every_n_days" in the prose, still asks for email
+    # and states the unattended-run guardrail.
     assert output == (
-        "Generate my spending report covering the last 2 days and email it to me."
+        "Generate my spending report covering the last 2 days and email it "
+        "to me. This is an unattended scheduled run — there is no one "
+        "available to answer a question, so do not ask for confirmation or "
+        "wait for a reply. If the current period has no data yet, sync "
+        "first; if data is still stale afterward, report on the most "
+        "recent available period instead and note the staleness. Always "
+        "finish by generating and emailing a report — never end by asking "
+        "a question."
     )
