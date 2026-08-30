@@ -36,6 +36,11 @@ class Base(DeclarativeBase):
     pass
 
 
+# Postgres bigint; SQLite needs the plain-Integer variant for rowid
+# autoincrement (and is dynamically int64 regardless).
+_BIGINT = BigInteger().with_variant(Integer, "sqlite")
+
+
 class Merchant(Base):
     """Merchant model."""
 
@@ -482,11 +487,8 @@ class AccountBalance(Base):
     )
 
     # Surrogate bigint: an append-only table accrues rows indefinitely.
-    # SQLite needs the plain-Integer variant for rowid autoincrement.
     balance_id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer, "sqlite"),
-        primary_key=True,
-        autoincrement=True,
+        _BIGINT, primary_key=True, autoincrement=True
     )
     account_id: Mapped[str] = mapped_column(
         String,
@@ -494,19 +496,12 @@ class AccountBalance(Base):
         nullable=False,
     )
     captured_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
-    # Money columns are bigint like the PK: int4 would cap an account at
-    # ~$21.5M in cents. SQLite is dynamically int64 either way.
-    current_cents: Mapped[int | None] = mapped_column(
-        BigInteger().with_variant(Integer, "sqlite"), nullable=True
-    )
+    # Money columns are bigint like the PK: int4 caps an account at ~$21.5M.
+    current_cents: Mapped[int | None] = mapped_column(_BIGINT, nullable=True)
     # available and limit are frequently null — plenty of institutions
     # report neither.
-    available_cents: Mapped[int | None] = mapped_column(
-        BigInteger().with_variant(Integer, "sqlite"), nullable=True
-    )
-    limit_cents: Mapped[int | None] = mapped_column(
-        BigInteger().with_variant(Integer, "sqlite"), nullable=True
-    )
+    available_cents: Mapped[int | None] = mapped_column(_BIGINT, nullable=True)
+    limit_cents: Mapped[int | None] = mapped_column(_BIGINT, nullable=True)
     currency: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Relationships
