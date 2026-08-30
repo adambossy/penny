@@ -128,17 +128,15 @@ def _run_periodic(
         write_state(state)
 
 
-def _report_is_due(
-    state: dict[str, Any], job: dict[str, Any], now_utc: datetime
-) -> bool:
-    return _periodic_is_due(state, _report_state_key(job["name"]), job, now_utc)
-
-
 def _due_reports(
     state: dict[str, Any], now_utc: datetime, jobs: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     """The jobs due this tick, highest priority first (ties keep config order)."""
-    due = [job for job in jobs if _report_is_due(state, job, now_utc)]
+    due = [
+        job
+        for job in jobs
+        if _periodic_is_due(state, _report_state_key(job["name"]), job, now_utc)
+    ]
     return sorted(due, key=lambda job: job["priority"], reverse=True)
 
 
