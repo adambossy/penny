@@ -243,6 +243,35 @@ def sync(
         )
 
 
+@app.command("capture-balances")
+def capture_balances() -> None:
+    """Capture every linked account's current balances as daily samples.
+
+    Appends one ``account_balances`` row per account and (self-healingly)
+    registers any account missing from ``plaid_accounts``. Run daily by
+    ``penny daemon``. A connection needing re-authentication is a reported
+    user-action line, not a failure — mirroring ``penny sync``.
+    """
+    from penny.adapters.clients.plaid import PlaidClient
+    from penny.bootstrap import bootstrap
+    from penny.db import get_db
+    from penny.tools._services.balance_capture import capture_account_balances
+
+    bootstrap()
+    summary = capture_account_balances(get_db(), PlaidClient.from_env())
+
+    typer.echo(
+        f"Balance capture complete: accounts={summary.accounts_captured} "
+        f"newly_registered={summary.accounts_registered} "
+        f"items={summary.items_captured} failed={summary.items_failed}"
+    )
+    if summary.relink_required_items:
+        typer.echo(
+            "Connections needing re-authentication: "
+            f"{', '.join(sorted(summary.relink_required_items))}"
+        )
+
+
 @app.command("eval-categorizer")
 def eval_categorizer(
     limit: int = typer.Option(
