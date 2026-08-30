@@ -136,11 +136,28 @@ def _normalize_job(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_jobs() -> list[dict[str, Any]]:
-    """The configured report jobs, or the single weekly default when unset."""
-    raw = load_config().get("jobs")
+    """The configured report jobs, or the single weekly default when unset.
+
+    A workspace whose ``config.toml`` predates ``[[jobs]]`` may still carry
+    its customized weekly slot under the old ``[schedule] report_weekday`` /
+    ``report_hour`` keys — those seed the single default job's cadence so
+    upgrading never silently resets a customized schedule back to Monday
+    08:00.
+    """
+    config = load_config()
+    raw = config.get("jobs")
     entries = raw if isinstance(raw, list) else []
     configured = [job for job in entries if isinstance(job, dict)]
-    return [_normalize_job(job) for job in configured or DEFAULT_JOBS]
+    if configured:
+        return [_normalize_job(job) for job in configured]
+    schedule = config.get("schedule")
+    schedule = schedule if isinstance(schedule, dict) else {}
+    legacy_job = dict(DEFAULT_JOBS[0])
+    if "report_weekday" in schedule:
+        legacy_job["weekday"] = schedule["report_weekday"]
+    if "report_hour" in schedule:
+        legacy_job["hour"] = schedule["report_hour"]
+    return [_normalize_job(legacy_job)]
 
 
 def write_config(

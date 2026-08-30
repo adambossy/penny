@@ -88,3 +88,29 @@ def test_no_jobs_table_falls_back_to_the_weekly_default(
 
     # assert
     assert [job["name"] for job in load_jobs()] == ["weekly"]
+
+
+def test_legacy_schedule_slot_seeds_the_default_weekly_job(
+    isolated_workspace: Path,
+) -> None:
+    # input: a pre-[[jobs]] workspace with a customized weekly slot — the
+    # shape `penny init` used to write before the [[jobs]] schedule existed.
+    (isolated_workspace / "config.toml").write_text(
+        "[schedule]\nsync_interval_hours = 12\nreport_weekday = 5\nreport_hour = 18\n",
+        encoding="utf-8",
+    )
+
+    # act
+    output = load_jobs()
+
+    # assert: the customized slot survives instead of resetting to Mon 08:00.
+    assert output == [
+        {
+            "name": "weekly",
+            "period": "weekly",
+            "hour": 18,
+            "priority": 1,
+            "recipients": None,
+            "weekday": 5,
+        }
+    ]
