@@ -133,13 +133,9 @@ class AccountBalances(PlaidBaseModel):
     last_updated_datetime: str | None = None
 
 
-class BalanceAccount(PlaidBaseModel):
-    account_id: str
-    name: str
-    official_name: str | None = None
-    mask: str | None = None
-    subtype: str | None = None
-    type: str | None = None
+class BalanceAccount(AccountsGetAccount):
+    """The same account wire shape as /accounts/get, plus its balances."""
+
     balances: AccountBalances = Field(default_factory=AccountBalances)
 
 
