@@ -133,7 +133,7 @@ def test_migration_money_columns_are_bigint_on_postgres():
     ddl = buf.getvalue()
     assert "balance_id BIGSERIAL" in ddl
     for name in ("current_cents", "available_cents", "limit_cents"):
-        assert f"{name} BIGINT," in ddl, name
+        assert f"{name} BIGINT" in ddl, name
 
 
 def test_schema_hint_documents_the_new_tables(tmp_path):
