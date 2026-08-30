@@ -239,30 +239,38 @@ def test_failed_send_does_not_advance_the_period(
 # --- balance capture: once per NY day at/after its hour, retry-on-failure ---
 
 
+def _balances_due(state: dict[str, Any], now: datetime, hour: int) -> bool:
+    return daemon._periodic_is_due(state, "balances", daemon._balances_job(hour), now)
+
+
 def test_balances_due_once_per_ny_day(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _stub_run_job(monkeypatch)
     state: dict[str, Any] = {}
 
     # 09:00 NY is past the default hour → due; a success spends the day.
-    assert daemon._due_balances(state, _MONDAY_9AM, 6)
-    daemon._capture_balances(state, _MONDAY_9AM, 6)
+    assert _balances_due(state, _MONDAY_9AM, 6)
+    daemon._run_periodic(
+        state, "balances", daemon._balances_job(6), ["capture-balances"], _MONDAY_9AM
+    )
 
     assert calls == [{"name": "balances", "argv": ["capture-balances"]}]
-    assert not daemon._due_balances(state, _MONDAY_9AM, 6)
+    assert not _balances_due(state, _MONDAY_9AM, 6)
     # The next NY day rolls the period identity, so it comes due again.
-    assert daemon._due_balances(state, _TUESDAY_9AM, 6)
+    assert _balances_due(state, _TUESDAY_9AM, 6)
 
 
 def test_balances_not_due_before_its_hour() -> None:
     # 13:00 UTC is 09:00 in New York — before a 22:00 gate.
-    assert not daemon._due_balances({}, _MONDAY_9AM, 22)
+    assert not _balances_due({}, _MONDAY_9AM, 22)
 
 
 def test_balances_failure_retries_next_tick(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_run_job(monkeypatch, ok=False)
     state: dict[str, Any] = {}
 
-    daemon._capture_balances(state, _MONDAY_9AM, 6)
+    daemon._run_periodic(
+        state, "balances", daemon._balances_job(6), ["capture-balances"], _MONDAY_9AM
+    )
 
     # No identity was recorded, so the day is not spent — still due.
-    assert daemon._due_balances(state, _MONDAY_9AM, 6)
+    assert _balances_due(state, _MONDAY_9AM, 6)
