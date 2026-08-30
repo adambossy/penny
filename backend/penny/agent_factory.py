@@ -142,6 +142,46 @@ def render_system_prompt(workspace_dir: Path | None = None) -> str:
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent  # .../backend/
 
 
+def load_skill_registry() -> SkillRegistry:
+    """The project's skill registry (``.agent/skills/``; no per-user skills)."""
+    return SkillRegistry.load(project_root=_PROJECT_ROOT, user_root=None)
+
+
+def format_skill_manifest(registry: SkillRegistry) -> str:
+    """Render the registry's manifest as system-reminder text.
+
+    The ``Skill`` tool's own description tells the model "you already saw
+    name + description + when_to_use for every skill in your system
+    prompt" — but nothing in agent-harness or Penny ever made that true.
+    This is what makes it true, delivered as a per-turn reminder (see
+    :func:`announce_skill_manifest`) rather than baked into the static
+    system prompt, which would bust its cache on every skill change.
+    """
+    lines = [
+        f"- {entry['name']}: {entry['description']} - {entry['when_to_use']}"
+        for entry in registry.manifest()
+    ]
+    return "The following skills are available via the Skill tool:\n\n" + "\n".join(
+        lines
+    )
+
+
+async def announce_skill_manifest(
+    reminders: ReminderQueue | None, session_id: str, registry: SkillRegistry
+) -> None:
+    """Enqueue the skill manifest as a reminder for this turn.
+
+    Call before driving the agent so the harness flush picks it up this same
+    turn (mirrors ``api/routes.py``'s ``_maybe_enqueue_onboarding``). No-op
+    when the caller provisions no reminder queue.
+    """
+    if reminders is None:
+        return
+    await reminders.enqueue(
+        session_id, "skill_manifest", format_skill_manifest(registry)
+    )
+
+
 AgentModel = (
     GeminiModel | OpenRouterModel | AnthropicMessagesModel | OpenAIResponsesModel
 )
@@ -316,7 +356,7 @@ def build_agent(
         else get_sandbox()
     )
 
-    skill_registry = SkillRegistry.load(project_root=_PROJECT_ROOT, user_root=None)
+    skill_registry = load_skill_registry()
     skill_tool = build_skill_tool(skill_registry)
 
     from agent_harness import StaticToolset
@@ -337,10 +377,12 @@ def build_agent(
         # A subsidized run carries a pricer so the loop emits ModelUsage events
         # the billing subscriber accrues; a BYO run passes None (no metering).
         usage_pricer=usage_pricer,
-        # Injected by the website (phase 5): a DB-backed ReminderQueue whose
-        # pending reminders the run loop drains into the next user message. The
-        # factory only sees the harness Protocol — the web-backed implementation
-        # is constructed by the caller, keeping agent/website segregation intact.
+        # A ReminderQueue whose pending reminders the run loop drains into the
+        # next user message — website callers pass a DB-backed queue (phase
+        # 5), the CLI a plain in-memory one (see cli.py._drive_agent), both
+        # carrying at least the skill manifest (announce_skill_manifest). The
+        # factory only sees the harness Protocol — the caller constructs the
+        # implementation, keeping agent/website segregation intact.
         reminders=reminders,
         toolsets=[
             # The onboarding-resolve op is website-owned persistence; the website
