@@ -50,8 +50,33 @@ if (agentUiSrc) {
   console.warn(`[vite] agent-ui aliased to LOCAL source: ${agentUiSrc}`);
 }
 
+// Stamp the build so `penny serve` can tell a dist built by this app from a
+// stale or foreign one — and, via `builtAt`, tell an up-to-date build from
+// one that predates a later source/dependency change. serve refuses a
+// foreign/unstamped dist and rebuilds a stale one; see penny/cli.py.
+function buildStamp() {
+  let outDir = "";
+  return {
+    name: "penny-build-stamp",
+    apply: "build" as const,
+    configResolved(config: { root: string; build: { outDir: string } }) {
+      outDir = path.resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      fs.writeFileSync(
+        path.join(outDir, "penny-build.json"),
+        JSON.stringify(
+          { app: "penny-single-player", builtAt: new Date().toISOString() },
+          null,
+          2,
+        ) + "\n",
+      );
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), buildStamp()],
   resolve: {
     // Force a single React instance. Historically, source-aliasing
     // agent-ui made its sibling `node_modules/react` resolve as a

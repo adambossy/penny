@@ -553,6 +553,166 @@ def daemon_status() -> None:
     typer.echo(_json.dumps(state, indent=2))
 
 
+def _frontend_build_stamp(dist: Path) -> dict | None:
+    """This app's build stamp (``penny-build.json``), or ``None`` if absent/corrupt/foreign.
+
+    ``npm run build`` writes the stamp (``vite.config.ts``); a dist without a
+    matching one is a stale pre-split or foreign build — the incident this
+    guards against served a gitignored pre-split dist, Clerk landing page and
+    all, against the no-auth backend.
+    """
+    import json
+
+    try:
+        stamp = json.loads((dist / "penny-build.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(stamp, dict) or stamp.get("app") != "penny-single-player":
+        return None
+    return stamp
+
+
+def _frontend_dist_ok(dist: Path) -> bool:
+    """True when ``dist`` carries this app's build stamp."""
+    return _frontend_build_stamp(dist) is not None
+
+
+# Inputs that determine what a build actually produces. `node_modules`
+# itself is deliberately excluded — any dependency version that matters is
+# already reflected in `package.json` / `package-lock.json`, so hashing the
+# lockfiles is enough to catch an `npm install` drift without walking every
+# installed package.
+_FRONTEND_SOURCE_DIRS = ("src", "packages")
+_FRONTEND_SOURCE_FILES = ("package.json", "package-lock.json", "vite.config.ts")
+_FRONTEND_SOURCE_EXCLUDE_DIRS = {"node_modules", "dist", ".git"}
+
+
+def _frontend_newest_source_mtime(frontend_dir: Path) -> float:
+    """The newest mtime among files that feed the build.
+
+    Compared against the dist's stamped ``builtAt`` to tell a build that
+    predates a later source or dependency change — the mtime approach costs
+    a stat-tree walk, not a hash, and a `git pull` or `npm install` already
+    bumps mtimes on every file it touches, so it catches exactly the drift
+    that matters (uncommitted edits included).
+    """
+    newest = 0.0
+    for name in _FRONTEND_SOURCE_FILES:
+        path = frontend_dir / name
+        if path.exists():
+            newest = max(newest, path.stat().st_mtime)
+    for dirname in _FRONTEND_SOURCE_DIRS:
+        root = frontend_dir / dirname
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            if _FRONTEND_SOURCE_EXCLUDE_DIRS & set(path.relative_to(root).parts):
+                continue
+            newest = max(newest, path.stat().st_mtime)
+    return newest
+
+
+def _frontend_dist_stale(dist: Path, frontend_dir: Path) -> bool:
+    """True when ``dist`` is missing, foreign/unstamped, or older than its sources."""
+    stamp = _frontend_build_stamp(dist)
+    if stamp is None:
+        return True
+    from datetime import datetime as _datetime
+
+    try:
+        built_at = _datetime.fromisoformat(str(stamp["builtAt"]).replace("Z", "+00:00"))
+    except (KeyError, ValueError):
+        return True
+    return _frontend_newest_source_mtime(frontend_dir) > built_at.timestamp()
+
+
+def _rebuild_frontend(frontend_dir: Path) -> bool:
+    """Run ``npm install && npm run build``; True on success.
+
+    Output streams straight to the console (no capture) — a build failure's
+    detail belongs in the terminal, not swallowed into an exception message.
+    """
+    import shutil
+    import subprocess
+
+    npm = shutil.which("npm")
+    if npm is None:
+        typer.echo("npm not found on PATH — cannot rebuild the frontend.", err=True)
+        return False
+    for args in (["install"], ["run", "build"]):
+        result = subprocess.run([npm, *args], cwd=frontend_dir)  # noqa: S603 - npm found via PATH, args are our own literals
+        if result.returncode != 0:
+            typer.echo(f"`npm {' '.join(args)}` failed — see output above.", err=True)
+            return False
+    return True
+
+
+def _resolve_frontend_dist(
+    explicit_dir: str | None, *, repo_root: Path | None = None
+) -> Path | None:
+    """The dist to serve, rebuilding the repo's default one when it's stale.
+
+    An explicit ``--frontend-dir`` is the caller's own choice: it must exist
+    and carry the stamp, but is never rebuilt (there is no source tree this
+    command can assume for an arbitrary path) — a bad one is a hard error,
+    not a silent downgrade. The repo-managed default (``frontend/dist``) is
+    instead kept fresh automatically: missing, foreign, or older than its own
+    sources triggers ``npm install && npm run build`` before serving.
+
+    ``repo_root`` defaults to this checkout's root; overridable for tests.
+    """
+    if explicit_dir is not None:
+        static = Path(explicit_dir).expanduser()
+        if not static.exists():
+            typer.echo(f"Frontend dir not found: {static}", err=True)
+            raise typer.Exit(1)
+        if not _frontend_dist_ok(static):
+            typer.echo(
+                f"{static} has no penny-build.json stamp — it was not built "
+                "by this app's `npm run build` (a stale pre-split or foreign "
+                "build). Rebuild it, or pass a freshly built dist.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        return static
+
+    if repo_root is None:
+        repo_root = Path(__file__).resolve().parent.parent.parent
+    frontend_dir = repo_root / "frontend"
+    candidate = frontend_dir / "dist"
+    if not frontend_dir.exists():
+        if candidate.exists() and _frontend_dist_ok(candidate):
+            return candidate
+        typer.echo(
+            "No built frontend found — serving the API only. "
+            "Build it with `npm run build` in frontend/."
+        )
+        return None
+
+    if not candidate.exists() or _frontend_dist_stale(candidate, frontend_dir):
+        typer.echo(
+            "Frontend is missing or stale — rebuilding "
+            "(`npm install && npm run build` in frontend/)…"
+        )
+        if not _rebuild_frontend(frontend_dir):
+            typer.echo(
+                "Rebuild failed — serving the API only. Fix the error above "
+                "and re-run `penny serve`, or build manually.",
+                err=True,
+            )
+            return None
+
+    if candidate.exists() and _frontend_dist_ok(candidate):
+        return candidate
+    typer.echo(
+        "No built frontend found — serving the API only. "
+        "Build it with `npm run build` in frontend/."
+    )
+    return None
+
+
 @app.command("serve")
 def serve(
     host: str = typer.Option(
@@ -579,11 +739,10 @@ def serve(
 
     On a Postgres database the alembic chain is applied first (idempotent);
     SQLite builds its schema at startup. The web UI is served from the built
-    frontend when available — without it, the API alone runs (use the Vite
-    dev server against it for development).
+    frontend — the repo's own ``frontend/dist`` is kept fresh automatically
+    (rebuilt when missing or stale); without one at all, the API alone runs
+    (or use the Vite dev server against it for development).
     """
-    from pathlib import Path
-
     import uvicorn
 
     from penny.api.app import AppConfig, create_app
@@ -591,21 +750,7 @@ def serve(
 
     prepare_database()
 
-    static: Path | None = None
-    if frontend_dir is not None:
-        static = Path(frontend_dir).expanduser()
-    else:
-        candidate = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
-        if candidate.exists():
-            static = candidate
-    if static is not None and not static.exists():
-        typer.echo(f"Frontend dir not found: {static}", err=True)
-        raise typer.Exit(1)
-    if static is None:
-        typer.echo(
-            "No built frontend found — serving the API only. "
-            "Build it with `npm run build` in frontend/."
-        )
+    static = _resolve_frontend_dist(frontend_dir)
 
     if all_in_one:
         import threading
