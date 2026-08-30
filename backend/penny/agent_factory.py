@@ -8,6 +8,8 @@ conversation carries its own session. Tools come from four sources:
 - :class:`FilesystemTools` — read/write/edit/grep/glob/list_dir on the
   workspace sandbox.
 - :func:`build_skill_tool` — progressive-disclosure skill registry.
+- :func:`build_agent_tool` — declarative subagents (``.agent/agents/``), one
+  callable tool per definition; empty until definitions are authored there.
 """
 
 from __future__ import annotations
@@ -16,11 +18,12 @@ from datetime import date, timedelta
 import os
 from pathlib import Path
 
-from agent_harness import Agent
+from agent_harness import Agent, StaticToolset
 from agent_harness.core.credentials import ApiKeyCredential, Credential
 from agent_harness.core.filesystem import FilesystemTools
 from agent_harness.core.models import Effort, ModelSettings, UsagePricer
 from agent_harness.core.skills import SkillRegistry, build_skill_tool
+from agent_harness.core.subagents import SubagentRegistry, build_agent_tool
 from agent_harness.extras.reminders import ReminderQueue
 from agent_harness.providers.anthropic import AnthropicMessagesModel, AnthropicProvider
 from agent_harness.providers.google import GeminiModel, GoogleProvider
@@ -145,6 +148,16 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent  # .../backend/
 def load_skill_registry() -> SkillRegistry:
     """The project's skill registry (``.agent/skills/``; no per-user skills)."""
     return SkillRegistry.load(project_root=_PROJECT_ROOT, user_root=None)
+
+
+def load_subagent_registry() -> SubagentRegistry:
+    """The project's subagent registry (``.agent/agents/``; no per-user agents).
+
+    Each ``.agent/agents/<name>.md`` definition becomes one callable tool on
+    the parent agent (see :func:`build_agent`) — empty until definitions are
+    authored there, same as the skill registry was before its first skill.
+    """
+    return SubagentRegistry.load(project_root=_PROJECT_ROOT, user_root=None)
 
 
 def format_skill_manifest(registry: SkillRegistry) -> str:
@@ -349,6 +362,21 @@ def _builtin_tools_for(model: AgentModel) -> list[dict[str, object]]:
     return []
 
 
+def _subagent_toolset(agent: Agent, registry: SubagentRegistry) -> StaticToolset:
+    """One callable tool per subagent definition in ``registry``, wrapping ``agent``.
+
+    ``build_agent_tool`` spawns a child inheriting ``agent``'s
+    model/toolsets/sandbox, so this can only run once ``agent`` exists —
+    called after construction in :func:`build_agent`, never passed into
+    ``toolsets=``. Currently ``.agent/agents/`` holds no definitions, so this
+    is an empty toolset until one is authored there.
+    """
+    return StaticToolset(
+        name="subagents",
+        tools=[build_agent_tool(d, agent) for d in registry.list_agents()],
+    )
+
+
 def build_agent(
     *,
     model: AgentModel,
@@ -382,12 +410,10 @@ def build_agent(
     skill_registry = skill_registry or load_skill_registry()
     skill_tool = build_skill_tool(skill_registry)
 
-    from agent_harness import StaticToolset
-
     skills_toolset = StaticToolset(name="skills", tools=[skill_tool])
     filesystem_tools = FilesystemTools(sandbox=sandbox)
 
-    return Agent(
+    agent = Agent(
         name="penny",
         model=model,
         instructions=render_system_prompt(workspace_dir),
@@ -419,3 +445,7 @@ def build_agent(
             skills_toolset,
         ],
     )
+
+    agent.toolsets.append(_subagent_toolset(agent, load_subagent_registry()))
+
+    return agent
