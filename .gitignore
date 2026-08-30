@@ -13,7 +13,7 @@ __pycache__/
 backend/.penny-workspace
 
 # Convention target for the above: an isolated per-worktree workspace dir
-.dev-workspace/
+.penny-dev/
 
 # Node
 node_modules/
