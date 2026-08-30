@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from penny import daemon
-from penny.daemon import _due_reports, _due_sync, _tick_reports
+from penny.daemon import _due_reports, _due_sync, _send_report, _tick_reports
 from penny.services.scheduled_reports import period_identity
 
 # Monday 2026-08-03, 09:00 in New York (13:00 UTC during EDT).
@@ -155,6 +155,31 @@ def test_catch_up_after_outage_sends_only_the_top_job(
     )
     assert _due_reports(state, _MONDAY_9AM, [_DAILY, _WEEKLY]) == []
     assert _due_reports(state, _TUESDAY_9AM, [_DAILY, _WEEKLY]) == [_DAILY]
+
+
+def test_successful_send_persists_resolved_period_before_returning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A crash right after a successful send must not re-trigger the report.
+
+    ``_run_job`` persists the bare "ok" run record on its own; if the resolved
+    period lagged behind until ``_tick_reports``'s trailing ``write_state``, a
+    daemon restart in between would see a successful run that still looks due
+    and would send the report again. Every ``write_state`` call is captured
+    so the last one observed before ``_send_report`` returns must already
+    carry the resolved period.
+    """
+    _stub_run_job(monkeypatch)
+    snapshots: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        daemon, "write_state", lambda state: snapshots.append({**state})
+    )
+    state: dict[str, Any] = {}
+
+    _send_report(state, _WEEKLY, _MONDAY_9AM)
+
+    assert snapshots, "a successful send must persist state"
+    assert "last_resolved_period" in snapshots[-1]["report:weekly"]
 
 
 def test_failed_send_does_not_advance_the_period(
