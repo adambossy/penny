@@ -341,6 +341,7 @@ def build_agent(
     usage_pricer: UsagePricer | None = None,
     reminders: ReminderQueue | None = None,
     onboarding_resolver: OnboardingResolver | None = None,
+    skill_registry: SkillRegistry | None = None,
 ) -> Agent:
     """Build the per-request Agent.
 
@@ -348,7 +349,11 @@ def build_agent(
     eval replays against a snapshot dir). Without it, the process-wide local
     workspace sandbox is used. ``effort`` is the conversation's pinned effort
     level (``None`` sends none — the vendor default applies); the thinking
-    budget is family-derived, never configured.
+    budget is family-derived, never configured. ``skill_registry`` lets a
+    caller that already loaded one for :func:`announce_skill_manifest` hand
+    it in, so the manifest reminder and the ``Skill`` tool it describes are
+    built from the same registry instance instead of walking
+    ``.agent/skills/`` twice.
     """
     sandbox = (
         InProcessSandbox(root=str(workspace_dir))
@@ -356,7 +361,7 @@ def build_agent(
         else get_sandbox()
     )
 
-    skill_registry = load_skill_registry()
+    skill_registry = skill_registry or load_skill_registry()
     skill_tool = build_skill_tool(skill_registry)
 
     from agent_harness import StaticToolset

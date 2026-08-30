@@ -105,7 +105,8 @@ async def _drive_agent(*, prompt_text: str, max_turns: int) -> bool:
     # website-only, see api/routes.py) — a plain in-memory one is enough to
     # carry the skill manifest into this run's first turn.
     reminders = InMemoryReminderQueue()
-    await announce_skill_manifest(reminders, session.session_id, load_skill_registry())
+    skill_registry = load_skill_registry()
+    await announce_skill_manifest(reminders, session.session_id, skill_registry)
     # max_turns is accepted for parity with the legacy CLI surface; the harness
     # loop is currently bounded by the model producing a final output. Logged so
     # the value is visible in job logs.
@@ -124,6 +125,7 @@ async def _drive_agent(*, prompt_text: str, max_turns: int) -> bool:
             session=session,
             persist_session=False,
             reminders=reminders,
+            skill_registry=skill_registry,
         )
         result = await agent.run(prompt_text, event_bus=bus)
     finally:

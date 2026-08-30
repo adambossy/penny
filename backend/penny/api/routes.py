@@ -285,8 +285,9 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
             try:
                 async with turn_wiring.turn(chat_id) as provision:
                     await _maybe_enqueue_onboarding(chat_id, provision.reminders)
+                    skill_registry = load_skill_registry()
                     await announce_skill_manifest(
-                        provision.reminders, chat_id, load_skill_registry()
+                        provision.reminders, chat_id, skill_registry
                     )
                     from penny.api.persistence.onboarding import resolve
 
@@ -301,6 +302,7 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
                         usage_pricer=provision.usage_pricer,
                         reminders=provision.reminders,
                         onboarding_resolver=resolve,
+                        skill_registry=skill_registry,
                     )
                     async for frame in stream_and_persist(
                         agent,
