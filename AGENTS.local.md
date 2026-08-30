@@ -44,6 +44,47 @@ other gitignored `*.env`, e.g. `backend/.env.test`) into every new worktree, so
 a secret edited once is live everywhere. The hook creates empty placeholders in
 the primary if either is missing, so the links never dangle.
 
+## Neon branches: single-player vs. single-player-dev vs. penny-prod
+
+Three tiers, one Neon project ("Penny", `purple-poetry-32142000`), so dev work
+can never corrupt the real single-player data:
+
+- **`production`** (`ep-divine-cake-apln1bk7`) — Neon's flagged primary/default
+  branch. Pre-cutover, tenant-shaped schema (chain through 028). Serves the
+  HOSTED multi-tenant legacy product (`legacy/saas-monolith`, Fly-deployed).
+  NEVER point single-player/local code at this.
+- **`single-player-20260801`** (`ep-soft-wind-ap7jk5ww`) — forked from
+  `production` 2026-08-01, migrated through 029 to the tenant-free shape
+  (Bossy Household data only). **The real, authoritative single-player
+  data.** Used exclusively by `~/penny-prod`.
+- **`single-player-dev`** (`ep-square-rice-appzfii0`) — forked from
+  `single-player-20260801` (already at the same schema, no migration
+  needed). Used by `~/code/penny` (this repo's primary checkout + every
+  worktree). Disposable — reset/delete/recreate anytime via `neonctl`.
+
+**Two checkouts, not one:**
+
+- **`~/code/penny`** — the dev repo (this one). Its shared `backend/.env`
+  (symlinked into every worktree) sets `PENNY_DATABASE_URL` to
+  `single-player-dev`; that wins over `DATABASE_URL` (still
+  `single-player-20260801`, kept only for reference) per `penny/db.py`'s
+  resolution order — so dev/test work here defaults to the disposable
+  branch regardless of which worktree or branch is checked out.
+- **`~/penny-prod`** — a separate standalone `git clone` of `origin/main`
+  (deliberately **not** a worktree, so it never inherits `~/code/penny`'s
+  symlinked `.env`). Its own `backend/.env` sets
+  `PENNY_WORKSPACE=/Users/adambossy/.penny` and `PENNY_DATABASE_URL` to the
+  real `single-player-20260801` branch. This is the stable, real running
+  instance — the one that actually installs `penny daemon` and sends real
+  scheduled email. Updated only via a deliberate `git pull origin main`
+  when promoting a new stable `main`, never by dev work landing on it
+  automatically.
+
+**Why:** these two checkouts used to implicitly share one Neon branch via
+`backend/.env`'s `DATABASE_URL` — a dev mistake (a bad migration, a buggy
+feature branch, an experimental script) could have corrupted the real
+Bossy Household data `penny-prod` depends on.
+
 ## Scheduler path (Sprites-forward)
 
 The cron-manager uses the **manager-spawns-ephemeral-job-machines** pattern with the headless Typer CLI as the job contract, deliberately chosen to pave the way for Fly's ephemeral-job-machine (Sprites) service. The job contract is: *run `penny <command>` in an ephemeral, auto-destroyed machine built from the app image, with per-job env injected from the cron `config.env`.* Migrating from `fly machine run` to Sprites later swaps only the **spawn primitive** — the job/CLI/image/env contract is unchanged. Do not adopt native Machine `schedule` or an in-container scheduler: neither produces per-job ephemeral machines, so both would be dead-ends for the Sprites trajectory.
