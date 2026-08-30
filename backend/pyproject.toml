@@ -24,8 +24,6 @@ dependencies = [
     "typer>=0.12",
     # Fernet encryption of Plaid access tokens at rest (penny.security).
     "cryptography>=43.0",
-    # RS256 + JWKS verification of Clerk-issued bearer tokens (penny.auth).
-    "pyjwt[crypto]>=2.8",
     # Vendor-neutral OTEL tracing exported to Langfuse over OTLP (see
     # penny.observability). agent-harness[otel] provides the API+SDK used by
     # its OTELSubscriber; the exporter ships spans to Langfuse's OTLP endpoint.
