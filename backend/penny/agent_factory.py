@@ -331,6 +331,24 @@ def _thinking_budget_for(model: AgentModel) -> int:
     return -1 if isinstance(model, GeminiModel) else _DEFAULT_THINKING_BUDGET
 
 
+def _builtin_tools_for(model: AgentModel) -> list[dict[str, object]]:
+    """Provider-native web search/fetch tools for ``model``.
+
+    ``ModelSettings.builtin_tools`` rides straight into the wire request, so
+    the tool names are each provider's own vocabulary. Only
+    ``providers/google.py`` and ``providers/openai.py`` forward this list at
+    all — ``providers/anthropic.py`` (and ``OpenRouterModel``, which reuses
+    its ``_build_payload`` wholesale) silently drops it, so Claude and
+    OpenRouter-served models get no builtin tools rather than a broken
+    request.
+    """
+    if isinstance(model, GeminiModel):
+        return [{"google_search": {}}, {"url_context": {}}]
+    if isinstance(model, OpenAIResponsesModel):
+        return [{"type": "web_search"}]
+    return []
+
+
 def build_agent(
     *,
     model: AgentModel,
@@ -377,7 +395,9 @@ def build_agent(
         persist_session=persist_session,
         sandbox=sandbox,
         model_settings=ModelSettings(
-            effort=effort, thinking_budget=_thinking_budget_for(model)
+            effort=effort,
+            thinking_budget=_thinking_budget_for(model),
+            builtin_tools=_builtin_tools_for(model),
         ),
         # A subsidized run carries a pricer so the loop emits ModelUsage events
         # the billing subscriber accrues; a BYO run passes None (no metering).
