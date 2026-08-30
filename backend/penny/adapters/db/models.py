@@ -494,11 +494,19 @@ class AccountBalance(Base):
         nullable=False,
     )
     captured_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
-    current_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Money columns are bigint like the PK: int4 would cap an account at
+    # ~$21.5M in cents. SQLite is dynamically int64 either way.
+    current_cents: Mapped[int | None] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), nullable=True
+    )
     # available and limit are frequently null — plenty of institutions
     # report neither.
-    available_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    limit_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    available_cents: Mapped[int | None] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), nullable=True
+    )
+    limit_cents: Mapped[int | None] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), nullable=True
+    )
     currency: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Relationships

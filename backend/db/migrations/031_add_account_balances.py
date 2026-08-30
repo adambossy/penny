@@ -41,9 +41,21 @@ def upgrade() -> None:
         ),
         sa.Column("account_id", sa.String(), nullable=False),
         sa.Column("captured_at", sa.TIMESTAMP(), nullable=False),
-        sa.Column("current_cents", sa.Integer(), nullable=True),
-        sa.Column("available_cents", sa.Integer(), nullable=True),
-        sa.Column("limit_cents", sa.Integer(), nullable=True),
+        sa.Column(
+            "current_cents",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            nullable=True,
+        ),
+        sa.Column(
+            "available_cents",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            nullable=True,
+        ),
+        sa.Column(
+            "limit_cents",
+            sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+            nullable=True,
+        ),
         sa.Column("currency", sa.String(), nullable=True),
         sa.ForeignKeyConstraint(
             ["account_id"], ["plaid_accounts.account_id"], ondelete="CASCADE"
