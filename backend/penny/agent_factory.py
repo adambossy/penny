@@ -1,7 +1,7 @@
 """Construct the agent-harness ``Agent`` the backend serves.
 
 One shared ``Agent`` factory; a fresh ``Agent`` is built per request so each
-conversation carries its own session. Tools come from four sources:
+conversation carries its own session. Tools come from five sources:
 
 - :func:`build_toolset` — Penny's core domain tools.
 - :func:`build_amazon_toolset` — Amazon plugin (self-contained subpackage).
