@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from sqlalchemy.dialects import postgresql
+
 from penny.adapters.db.facade import DB
 from penny.adapters.db.models import AccountBalance, PlaidAccount, PlaidItem
 
@@ -95,6 +97,19 @@ def test_add_account_balances_appends_without_dedupe(tmp_path):
         assert samples[0].current_cents == 12345
         assert samples[0].available_cents is None
         assert samples[1].balance_id > samples[0].balance_id
+
+
+def test_money_columns_are_bigint_on_postgres():
+    """Money columns must be int8 on Postgres: int4 caps an account at ~$21.5M.
+
+    The drift test compares column names only, and SQLite is dynamically int64
+    either way, so a narrowing here would only surface as a production
+    overflow — pin the dialect-compiled type instead.
+    """
+    dialect = postgresql.dialect()
+    for name in ("balance_id", "current_cents", "available_cents", "limit_cents"):
+        column_type = AccountBalance.__table__.c[name].type
+        assert column_type.compile(dialect) == "BIGINT", name
 
 
 def test_schema_hint_documents_the_new_tables(tmp_path):
