@@ -15,6 +15,7 @@ propagates to the caller.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -88,11 +89,19 @@ def capture_account_balances(
     """
     captured_at = captured_at or datetime.now(UTC)
     summary = BalanceCaptureSummary()
+    items = db.list_plaid_items()
 
-    for item in db.list_plaid_items():
+    # The live pull forces a round trip to each bank (slow by design — see
+    # PlaidClient.get_balances), and items are independent, so fetch them in
+    # parallel like sync does; the DB writes below stay sequential (SQLite
+    # allows one writer).
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(items)))) as pool:
+        pulls = [pool.submit(client.get_balances, item.access_token) for item in items]
+
+    for item, pull in zip(items, pulls, strict=True):
         label = item.institution_name or item.item_id
         try:
-            accounts = client.get_balances(item.access_token)
+            accounts = pull.result()
         except (PlaidClientError, ValueError) as exc:
             logger.bind(item_id=item.item_id).warning(
                 "Balance capture failed for item {} ({}): {}",
