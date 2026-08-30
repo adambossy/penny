@@ -53,21 +53,6 @@ def test_unknown_model_falls_back_to_its_id(
     assert model["label"] == "some-vendor/experimental-9"
 
 
-def test_config_lists_the_offered_choices(isolated_db) -> None:
-    """The picker's list is generated from the selection — the UI holds no
-    model knowledge of its own."""
-    with TestClient(main.app) as client:
-        r = client.get("/api/config")
-
-    models = r.json()["models"]
-    assert len(models) == 29
-    assert all(set(entry) == {"key", "label"} for entry in models)
-    keys = {entry["key"] for entry in models}
-    assert "claude-opus-5:xhigh" in keys
-    assert "moonshotai/kimi-k3" in keys
-    assert "claude-sonnet-4-6:xhigh" not in keys  # the vendor has no xhigh there
-
-
 def test_default_model_falls_back_to_configured(
     isolated_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:

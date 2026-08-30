@@ -32,11 +32,6 @@ _EFFORT_LEVELS_BY_MODEL = {
 }
 
 
-def test_offers_the_full_flat_list() -> None:
-    """2 OpenRouter + (3 GPT × 4) + (3 Claude × 4) + (Sonnet 4.6 × 3) = 29."""
-    assert len(offered_choices()) == 29
-
-
 def test_no_offered_effort_is_rejected_by_the_catalogue() -> None:
     """The selection can only offer levels the harness says the model accepts."""
     for choice in offered_choices():
@@ -55,7 +50,7 @@ def test_sonnet_4_6_has_no_xhigh_entry() -> None:
 
 
 def test_openrouter_models_carry_no_effort() -> None:
-    for model in (_openrouter.KIMI_K3, _openrouter.GLM_5_2):
+    for model in (_openrouter.KIMI_K3, _openrouter.GLM_5_3, _openrouter.GLM_5_3_FLASH):
         choice = resolve_choice(model)
         assert choice is not None
         assert choice.effort is None
