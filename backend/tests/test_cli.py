@@ -66,10 +66,19 @@ def test_run_scheduled_report_picks_the_named_job(
     cli.run_scheduled_report(job="weekly", max_turns=3)
 
     # expected: the weekly job's period + window drive the prompt, which
-    # still explicitly asks for email delivery (commit 1696ebf), and the
-    # job's own recipients override the ambient default for the send tool.
+    # still explicitly asks for email delivery (commit 1696ebf) and states
+    # this is unattended so the agent resolves stale data itself instead of
+    # asking a question no one will answer (an observed run asked "shall I
+    # sync now?" and silently never sent) — and the job's own recipients
+    # override the ambient default for the send tool.
     expected_prompt = (
-        "Generate my weekly spending report covering this week and email it to me."
+        "Generate my weekly spending report covering this week and email it "
+        "to me. This is an unattended scheduled run — there is no one "
+        "available to answer a question, so do not ask for confirmation or "
+        "wait for a reply. If the current period has no data yet, sync "
+        "first; if data is still stale afterward, report on the most recent "
+        "available period instead and note the staleness. Always finish by "
+        "generating and emailing a report — never end by asking a question."
     )
 
     # assert
