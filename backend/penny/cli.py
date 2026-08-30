@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -27,7 +29,23 @@ from penny.settings import apply_config_to_env
 # Load env once at the entrypoint (project convention), without clobbering
 # anything already injected into the environment; then the workspace
 # config.toml supplies defaults for anything still unset.
+_had_real_workspace_env = "PENNY_WORKSPACE" in os.environ
 load_dotenv(override=False)
+
+# backend/.env is symlinked into every worktree by the WorktreeCreate hook
+# (single source of truth for secrets), so a PENNY_WORKSPACE set there is
+# identical everywhere too — every worktree ends up sharing one workspace.
+# .penny-workspace is a per-worktree, gitignored, un-symlinked (the hook
+# only links .env / .env.* / *.env) escape hatch: drop a
+# PENNY_WORKSPACE=<path> line in it to give one worktree its own
+# memory/reports/config.toml without touching the shared secrets file.
+# Only allowed to beat .env's own PENNY_WORKSPACE, never a real environment
+# variable set before this module was imported (e.g. a test harness's
+# redirect) — that must always win, per the project's env-contract rule.
+if not _had_real_workspace_env:
+    load_dotenv(
+        Path(__file__).resolve().parent.parent / ".penny-workspace", override=True
+    )
 apply_config_to_env()
 
 # Error tracking as early as possible so CLI / scheduled-job crashes are
