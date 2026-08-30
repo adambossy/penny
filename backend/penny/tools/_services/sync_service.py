@@ -11,7 +11,11 @@ import loguru
 from loguru import logger
 from sqlalchemy.orm import make_transient
 
-from penny.adapters.clients.plaid import PlaidClient, PlaidClientError
+from penny.adapters.clients.plaid import (
+    PlaidClient,
+    PlaidClientError,
+    is_relink_error,
+)
 from penny.adapters.clients.plaid_models import Transaction
 from penny.adapters.db.facade import DB
 from penny.config import categorizer_model
@@ -41,23 +45,12 @@ if TYPE_CHECKING:
 # 503s; the sweep is cursor-independent so throughput is not the constraint.
 _CATEGORIZE_CONCURRENCY = 3
 
-# Plaid item-error codes that mean "the user must re-authenticate this bank" (as
-# opposed to a transient/network blip). A sync hitting one of these reports the
-# item as needing a relink rather than crashing the whole run.
-_PLAID_RELINK_CODES = (
-    "ITEM_LOGIN_REQUIRED",
-    "PENDING_EXPIRATION",
-    "INVALID_CREDENTIALS",
-    "INVALID_MFA",
-    "ITEM_LOCKED",
-    "USER_PERMISSION_REVOKED",
-)
-
 
 def _relink_label(item: Any, exc: BaseException) -> str | None:
     """If ``exc`` is a Plaid re-auth error for ``item``, return a human label
-    (the institution name) to report; else ``None`` (a transient/other error)."""
-    if any(code in str(exc) for code in _PLAID_RELINK_CODES):
+    (the institution name) to report; else ``None`` (a transient/other error).
+    A sync hitting a relink error reports the item rather than crashing the run."""
+    if is_relink_error(exc):
         return item.institution_name or item.item_id
     return None
 
