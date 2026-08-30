@@ -22,21 +22,10 @@ from penny.services.scheduled_reports import period_identity
 _MONDAY_9AM = datetime(2026, 8, 3, 13, 0, tzinfo=UTC)
 _TUESDAY_9AM = _MONDAY_9AM + timedelta(days=1)
 
-_DAILY = {
-    "name": "daily",
-    "period": "daily",
-    "hour": 8,
-    "recipients": ["me@example.com"],
-    "priority": 1,
-}
-_WEEKLY = {
-    "name": "weekly",
-    "period": "weekly",
-    "weekday": 1,
-    "hour": 8,
-    "recipients": ["me@example.com", "spouse@example.com"],
-    "priority": 2,
-}
+# The daemon only reads the scheduling fields; recipients live in the job's
+# own config and are applied by `run-scheduled-report` itself (see test_cli).
+_DAILY = {"name": "daily", "period": "daily", "hour": 8, "priority": 1}
+_WEEKLY = {"name": "weekly", "period": "weekly", "weekday": 1, "hour": 8, "priority": 2}
 
 
 def _state(name: str, *, ran_at: datetime, ok: bool) -> dict:
@@ -55,14 +44,8 @@ def _stub_run_job(
     """Replace the subprocess runner; mimic its state write, capture calls."""
     calls: list[dict[str, Any]] = []
 
-    def run(
-        state: dict[str, Any],
-        name: str,
-        argv: list[str],
-        *,
-        extra_env: dict[str, str] | None = None,
-    ) -> bool:
-        calls.append({"name": name, "argv": argv, "extra_env": extra_env})
+    def run(state: dict[str, Any], name: str, argv: list[str]) -> bool:
+        calls.append({"name": name, "argv": argv})
         state[name] = {
             "last_run_at": datetime.now(UTC).isoformat(),
             "ok": ok,
@@ -124,12 +107,9 @@ def test_cap_sends_highest_priority_and_resolves_the_rest(
 
     _tick_reports(state, _MONDAY_9AM, [_DAILY, _WEEKLY], 1)
 
-    # Only weekly (priority 2) ran, addressed via its own subprocess env.
+    # Only weekly (priority 2) ran.
     assert [c["name"] for c in calls] == ["report:weekly"]
     assert calls[0]["argv"] == ["run-scheduled-report", "--job", "weekly"]
-    assert calls[0]["extra_env"] == {
-        "PENNY_REPORT_RECIPIENTS": "me@example.com,spouse@example.com"
-    }
     assert state["report:weekly"]["last_resolved_period"] == period_identity(
         _WEEKLY, now_utc=_MONDAY_9AM
     )
@@ -190,16 +170,3 @@ def test_failed_send_does_not_advance_the_period(
     assert state["report:weekly"]["ok"] is False
     assert "last_resolved_period" not in state["report:weekly"]
     assert _due_reports(state, _MONDAY_9AM, [_WEEKLY]) == [_WEEKLY]
-
-
-def test_job_without_recipients_inherits_the_ambient_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = _stub_run_job(monkeypatch)
-    job = {**_DAILY, "recipients": None}
-
-    _tick_reports({}, _MONDAY_9AM, [job], 1)
-
-    # No override: the subprocess keeps whatever PENNY_REPORT_RECIPIENTS the
-    # daemon's own environment already carries.
-    assert calls[0]["extra_env"] is None

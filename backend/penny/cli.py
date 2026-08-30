@@ -151,15 +151,14 @@ def run_scheduled_report(
     """Run one configured report job (the daemon invokes this per due job).
 
     Drives the period-parameterized ``spending-report`` skill — there are no
-    ``report-*`` prompt keys. Recipients come from the environment
-    (``PENNY_REPORT_RECIPIENTS``, set per-job by the daemon;
-    ``send_email_report`` needs no address).
+    ``report-*`` prompt keys. The job's own ``recipients`` (when set) are
+    exported as ``PENNY_REPORT_RECIPIENTS`` here, so a manual run behaves
+    exactly like a daemon-spawned one; otherwise the ambient default applies
+    (``send_email_report`` needs no address either way).
     """
-    from penny.services.scheduled_reports import (
-        NEW_YORK_TZ,
-        period_identity,
-        report_prompt,
-    )
+    import os
+
+    from penny.services.scheduled_reports import report_prompt
     from penny.settings import load_jobs
 
     jobs = {entry["name"]: entry for entry in load_jobs()}
@@ -172,13 +171,9 @@ def run_scheduled_report(
         )
         raise typer.Exit(1)
 
-    now_utc = datetime.now(UTC)
-    now_ny = now_utc.astimezone(NEW_YORK_TZ)
-    typer.echo(
-        f"Running report job {job!r}: period={job_config['period']} "
-        f"identity={period_identity(job_config, now_utc=now_utc)} "
-        f"({now_ny:%Y-%m-%d %H:%M:%S %Z})"
-    )
+    if job_config["recipients"]:
+        os.environ["PENNY_REPORT_RECIPIENTS"] = ",".join(job_config["recipients"])
+    typer.echo(f"Running report job {job!r} (period={job_config['period']})")
     prompt_text = _build_prompt(prompt=report_prompt(job_config), prompt_key=None)
     _run_and_exit(prompt_text=prompt_text, max_turns=max_turns)
 
@@ -384,27 +379,20 @@ def init() -> None:
     # The wizard configures one weekly report job (YAGNI: more jobs are a
     # hand-edit, not a UI). A config that already carries [[jobs]] is kept
     # verbatim so re-running init never clobbers a hand-tuned schedule.
-    configured_jobs = load_jobs()  # the stored [[jobs]], or the weekly default
-    if existing.get("jobs"):
-        jobs = configured_jobs
-    else:
-        weekly = configured_jobs[0]
-        jobs = [
-            {
-                **weekly,
-                "weekday": int(
-                    typer.prompt(
-                        "Weekly report weekday (1=Mon … 7=Sun)",
-                        default=str(weekly["weekday"]),
-                    )
-                ),
-                "hour": int(
-                    typer.prompt(
-                        "Weekly report hour (local, 0-23)", default=str(weekly["hour"])
-                    )
-                ),
-            }
-        ]
+    jobs = load_jobs()  # the stored [[jobs]], or the single weekly default
+    if not existing.get("jobs"):
+        weekly = jobs[0]
+        weekly["weekday"] = int(
+            typer.prompt(
+                "Weekly report weekday (1=Mon … 7=Sun)",
+                default=str(weekly["weekday"]),
+            )
+        )
+        weekly["hour"] = int(
+            typer.prompt(
+                "Weekly report hour (local, 0-23)", default=str(weekly["hour"])
+            )
+        )
     path = write_config(prior_env, schedule, jobs)
     typer.echo(f"Wrote {path}")
     typer.echo(
