@@ -8,12 +8,16 @@ one sample per account per run and never dedupes.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import io
 from pathlib import Path
 
+from alembic.config import Config
 from sqlalchemy.dialects import postgresql
 
+from alembic import command
 from penny.adapters.db.facade import DB
 from penny.adapters.db.models import AccountBalance, PlaidAccount, PlaidItem
+from penny.schema import _alembic_ini
 
 
 def _create_db(tmp_path: Path) -> DB:
@@ -99,17 +103,37 @@ def test_add_account_balances_appends_without_dedupe(tmp_path):
         assert samples[1].balance_id > samples[0].balance_id
 
 
-def test_money_columns_are_bigint_on_postgres():
+def test_model_money_columns_are_bigint_on_postgres():
     """Money columns must be int8 on Postgres: int4 caps an account at ~$21.5M.
 
     The drift test compares column names only, and SQLite is dynamically int64
     either way, so a narrowing here would only surface as a production
-    overflow — pin the dialect-compiled type instead.
+    overflow — pin the dialect-compiled type instead. This covers the ORM
+    model; the migration side is pinned by the companion test below.
     """
     dialect = postgresql.dialect()
     for name in ("balance_id", "current_cents", "available_cents", "limit_cents"):
         column_type = AccountBalance.__table__.c[name].type
         assert column_type.compile(dialect) == "BIGINT", name
+
+
+def test_migration_money_columns_are_bigint_on_postgres():
+    """Pin migration 031's Postgres DDL — alembic, not the model, is what
+    actually ships the Postgres schema, so the model-side test alone would
+    miss a narrowing edited into the migration.
+
+    Offline (--sql) mode renders the 030→031 step without a database.
+    """
+    buf = io.StringIO()
+    cfg = Config(str(_alembic_ini()), output_buffer=buf)
+    cfg.set_main_option("sqlalchemy.url", "postgresql://")
+    command.upgrade(
+        cfg, "030_add_conversation_model:031_add_account_balances", sql=True
+    )
+    ddl = buf.getvalue()
+    assert "balance_id BIGSERIAL" in ddl
+    for name in ("current_cents", "available_cents", "limit_cents"):
+        assert f"{name} BIGINT," in ddl, name
 
 
 def test_schema_hint_documents_the_new_tables(tmp_path):
