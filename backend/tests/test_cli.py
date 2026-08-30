@@ -200,3 +200,39 @@ def test_run_and_exit_no_output_exits_nonzero(
 
     # assert
     assert exc_info.value.exit_code == expected_code
+
+
+def test_capture_balances_reports_summary_and_relink(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`capture-balances` mirrors `sync`: a relink is a reported line, exit 0."""
+    import penny.adapters.clients.plaid as plaid_mod
+    import penny.bootstrap as bootstrap_mod
+    import penny.db as db_mod
+    from penny.tools._services import balance_capture as capture_mod
+    from penny.tools._services.balance_capture import BalanceCaptureSummary
+
+    # All collaborators are imported lazily inside the command; patch at source.
+    monkeypatch.setattr(bootstrap_mod, "bootstrap", lambda: None)
+    monkeypatch.setattr(db_mod, "get_db", lambda: object())
+    monkeypatch.setattr(
+        plaid_mod.PlaidClient, "from_env", classmethod(lambda cls: object())
+    )
+    summary = BalanceCaptureSummary(
+        accounts_captured=22,
+        accounts_registered=7,
+        items_captured=9,
+        items_failed=1,
+        relink_required_items=["Chase"],
+    )
+    monkeypatch.setattr(
+        capture_mod, "capture_account_balances", lambda db, client: summary
+    )
+
+    # act: does not raise — the broken connection is user-action, not failure
+    cli.capture_balances()
+
+    out = capsys.readouterr().out
+    assert "accounts=22 newly_registered=7 items=9 failed=1" in out
+    assert "Connections needing re-authentication: Chase" in out
