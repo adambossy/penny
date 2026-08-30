@@ -36,11 +36,9 @@ SCHEDULE_DEFAULTS: dict[str, int] = {
     "max_emails_per_day": 1,
 }
 
-# The common fields every job carries, with their defaults.
-_JOB_DEFAULTS: dict[str, Any] = {"period": "weekly", "hour": 8, "priority": 1}
-
-# The cadence fields each period type carries on top of those, with the
-# default used when a hand-edited entry omits one — drives parsing and writing.
+# The cadence fields each period type carries on top of the common ones
+# (name / period / hour / priority / recipients), with the default used when
+# a hand-edited entry omits one — drives parsing and writing.
 _PERIOD_CADENCE_FIELDS: dict[str, dict[str, int]] = {
     "daily": {},
     "weekly": {"weekday": 1},  # ISO weekday: 1=Mon … 7=Sun
@@ -121,15 +119,15 @@ def _normalize_job(raw: dict[str, Any]) -> dict[str, Any]:
     has to guess. ``recipients`` collapses to None when absent/empty so the
     job falls back to the ambient PENNY_REPORT_RECIPIENTS.
     """
-    period = str(raw.get("period", _JOB_DEFAULTS["period"]))
+    period = str(raw.get("period", "weekly"))
     recipients: list[str] = []
     if isinstance(raw.get("recipients"), list):
         recipients = [str(r).strip() for r in raw["recipients"] if str(r).strip()]
     job: dict[str, Any] = {
         "name": str(raw.get("name") or period),
         "period": period,
-        "hour": int(raw.get("hour", _JOB_DEFAULTS["hour"])),
-        "priority": int(raw.get("priority", _JOB_DEFAULTS["priority"])),
+        "hour": int(raw.get("hour", 8)),
+        "priority": int(raw.get("priority", 1)),
         "recipients": recipients or None,
     }
     for field, default in _PERIOD_CADENCE_FIELDS.get(period, {}).items():
@@ -148,7 +146,7 @@ def load_jobs() -> list[dict[str, Any]]:
 def write_config(
     env: dict[str, str],
     schedule: dict[str, Any],
-    jobs: list[dict[str, Any]] | None = None,
+    jobs: list[dict[str, Any]],
 ) -> Path:
     """Write config.toml (chmod 600 — it holds secrets). Returns the path.
 
@@ -168,7 +166,7 @@ def write_config(
         f"{key} = {int(schedule.get(key, default))}"
         for key, default in SCHEDULE_DEFAULTS.items()
     ]
-    for raw_job in DEFAULT_JOBS if jobs is None else jobs:
+    for raw_job in jobs:
         job = _normalize_job(raw_job)
         lines += ["", "[[jobs]]"]
         lines.append(f"name = {_toml_string(job['name'])}")

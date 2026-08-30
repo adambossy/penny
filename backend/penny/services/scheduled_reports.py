@@ -92,13 +92,6 @@ def is_due_today(job: dict[str, Any], *, now_utc: datetime | None = None) -> boo
     return day_matches and now_ny.hour >= int(job["hour"])
 
 
-def _period_window(job: dict[str, Any]) -> str:
-    """The content window the report should cover, as prompt-ready English."""
-    if job["period"] == "every_n_days":
-        return f"the last {int(job['n'])} days"
-    return _WINDOWS[job["period"]]
-
-
 def report_prompt(job: dict[str, Any]) -> str:
     """Natural-language request that triggers the ``spending-report`` skill.
 
@@ -111,7 +104,12 @@ def report_prompt(job: dict[str, Any]) -> str:
     generate the report but never send it (exit 0, no email).
     """
     period = job["period"]
-    window = _period_window(job)
     if period == "every_n_days":
-        return f"Generate my spending report covering {window} and email it to me."
-    return f"Generate my {period} spending report covering {window} and email it to me."
+        return (
+            f"Generate my spending report covering the last {int(job['n'])} days "
+            "and email it to me."
+        )
+    return (
+        f"Generate my {period} spending report covering {_WINDOWS[period]} "
+        "and email it to me."
+    )

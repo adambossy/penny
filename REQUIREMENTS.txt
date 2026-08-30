@@ -55,9 +55,10 @@ P4. Scheduled reports & the daemon
     `penny serve --all-in-one` co-runs it for casual use. Job state (last
     run, outcome, last resolved period) is inspectable via `penny daemon
     status` and the agent's `sync_status` tool. Report recipients come from
-    configuration only — per job via [[jobs]] (injected into the job
-    subprocess's environment by the daemon) or the PENNY_REPORT_RECIPIENTS
-    default — never from the prompt or the model.
+    configuration only — per job via [[jobs]] (applied by `penny
+    run-scheduled-report` itself, so manual and daemon-spawned runs behave
+    identically) or the PENNY_REPORT_RECIPIENTS default — never from the
+    prompt or the model.
 
 P5. Amazon itemization
     Optionally enrich Amazon transactions by scraping order detail so spending

@@ -9,12 +9,10 @@ slot, recipients, and priority).
 Report scheduling is period-identity based, not slot based: a job becomes
 eligible when its current period identity (``penny.services
 .scheduled_reports.period_identity``) differs from the one last resolved in
-daemon state. Each tick the due jobs are ranked by priority and at most
-``max_emails_per_day`` of them send; the rest are resolved for the current
-period without sending. After an outage spanning several boundaries, only the
-single highest-priority still-due job fires — nothing backfills. Only a
-successful send (or a deliberate cap-suppression) advances a job's period; a
-failed send retries on the next tick.
+daemon state, and each tick the highest-priority ``max_emails_per_day`` due
+jobs send while the rest resolve their period without sending. REQUIREMENTS
+P4 holds the full policy (no backfill after an outage; only success or
+cap-suppression advances a job, so a failed send retries next tick).
 
 State (last run / outcome per job) is written to ``logs/daemon-state.json``
 in the workspace so ``penny daemon status`` and the agent's ``sync_status``
@@ -28,7 +26,6 @@ macOS, systemd user unit on Linux) — see ``penny.service_install``.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-import os
 import subprocess
 import time
 from typing import Any
@@ -43,19 +40,11 @@ from penny.settings import load_jobs, load_schedule
 _TICK_SECONDS = 60.0
 
 
-def _run_job(
-    state: dict[str, Any],
-    name: str,
-    argv: list[str],
-    *,
-    extra_env: dict[str, str] | None = None,
-) -> bool:
+def _run_job(state: dict[str, Any], name: str, argv: list[str]) -> bool:
     """Run one job as a subprocess of this CLI; record outcome in state.
 
     A subprocess (``penny sync`` / ``penny run-scheduled-report``) keeps each
     job's crash contained: the daemon loop survives anything a job does.
-    ``extra_env`` overlays that one subprocess's environment (per-job
-    recipients ride in this way) — the daemon's own environ is never mutated.
     """
     started = datetime.now(UTC)
     logger.info("daemon: starting job {}", name)
@@ -65,7 +54,6 @@ def _run_job(
             capture_output=True,
             text=True,
             timeout=7200,
-            env={**os.environ, **extra_env} if extra_env else None,
         )
         ok = proc.returncode == 0
         detail = (proc.stdout or "")[-2000:] if ok else (proc.stderr or "")[-2000:]
@@ -119,21 +107,15 @@ def _due_reports(
 
 
 def _send_report(state: dict[str, Any], job: dict[str, Any], now_utc: datetime) -> None:
-    """Run one report job as a subprocess; only a success spends its period."""
+    """Run one report job as a subprocess; only a success spends its period.
+
+    The job subprocess resolves its own recipients from the ``[[jobs]]``
+    config, so the daemon passes nothing but the job's name.
+    """
     key = _report_state_key(job["name"])
-    recipients = job.get("recipients")
-    extra_env = (
-        {"PENNY_REPORT_RECIPIENTS": ",".join(recipients)} if recipients else None
-    )
-    ok = _run_job(
-        state,
-        key,
-        ["run-scheduled-report", "--job", job["name"]],
-        extra_env=extra_env,
-    )
+    ok = _run_job(state, key, ["run-scheduled-report", "--job", job["name"]])
     if ok:
         state[key]["last_resolved_period"] = period_identity(job, now_utc=now_utc)
-        write_state(state)
 
 
 def _resolve_without_sending(
@@ -159,21 +141,26 @@ def _tick_reports(
     Suppressed jobs are resolved for their *current* period only — after an
     outage they lose exactly the occurrence they lost the slot for, and come
     due again at their next natural boundary; nothing retro-sends.
+
+    The pass owns persistence of the resolutions: the helpers above only
+    mutate ``state``, and one ``write_state`` at the end records every period
+    spent this pass (``_run_job`` still persists each run record as it
+    happens).
     """
     due = _due_reports(state, now_utc, jobs)
     winners, suppressed = due[:max_emails_per_day], due[max_emails_per_day:]
     for job in winners:
         _send_report(state, job, now_utc)
-    if not suppressed:
-        return
-    detail = (
-        f"resolved without sending: suppressed by "
-        f"max_emails_per_day={max_emails_per_day} "
-        f"({', '.join(job['name'] for job in winners)} won)"
-    )
-    for job in suppressed:
-        _resolve_without_sending(state, job, now_utc, detail)
-    write_state(state)
+    if suppressed:
+        detail = (
+            f"resolved without sending: suppressed by "
+            f"max_emails_per_day={max_emails_per_day} "
+            f"({', '.join(job['name'] for job in winners)} won)"
+        )
+        for job in suppressed:
+            _resolve_without_sending(state, job, now_utc, detail)
+    if due:
+        write_state(state)
 
 
 def run_daemon() -> None:

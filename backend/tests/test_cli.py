@@ -1,13 +1,15 @@
 """Unit tests for the headless Typer CLI front door.
 
 Covers ``run-scheduled-report --job`` resolution against the configured
-``[[jobs]]`` and a smoke test that ``_run_and_exit`` constructs the agent
-through the real ``build_agent`` seam and maps the run outcome to an exit
-code — with the model, email, and network fully stubbed (no live run).
+``[[jobs]]`` (including per-job recipients export) and a smoke test that
+``_run_and_exit`` constructs the agent through the real ``build_agent`` seam
+and maps the run outcome to an exit code — with the model, email, and network
+fully stubbed (no live run).
 """
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from typing import Any
 
@@ -23,21 +25,26 @@ _JOBS = [
         "period": "weekly",
         "weekday": 1,
         "hour": 8,
-        "recipients": None,
+        "recipients": ["me@example.com", "spouse@example.com"],
         "priority": 2,
     },
 ]
+
+_AMBIENT_RECIPIENTS = "ambient@example.com"
 
 
 def _patch_jobs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Stub the configured jobs and capture what the command runs with.
 
     ``load_jobs`` is imported lazily inside the command from ``penny.settings``
-    and the run itself goes through ``_run_and_exit``; patch both seams.
+    and the run itself goes through ``_run_and_exit``; patch both seams. An
+    ambient PENNY_REPORT_RECIPIENTS is set (and restored by monkeypatch) so
+    the per-job override is observable.
     """
     import penny.settings as settings
 
     captured: dict[str, Any] = {}
+    monkeypatch.setenv("PENNY_REPORT_RECIPIENTS", _AMBIENT_RECIPIENTS)
     monkeypatch.setattr(settings, "load_jobs", lambda: [dict(j) for j in _JOBS])
     monkeypatch.setattr(
         cli,
@@ -59,13 +66,31 @@ def test_run_scheduled_report_picks_the_named_job(
     cli.run_scheduled_report(job="weekly", max_turns=3)
 
     # expected: the weekly job's period + window drive the prompt, which
-    # still explicitly asks for email delivery (commit 1696ebf).
+    # still explicitly asks for email delivery (commit 1696ebf), and the
+    # job's own recipients override the ambient default for the send tool.
     expected_prompt = (
         "Generate my weekly spending report covering this week and email it to me."
     )
 
     # assert
     assert captured == {"prompt": expected_prompt, "max_turns": 3}
+    assert os.environ["PENNY_REPORT_RECIPIENTS"] == (
+        "me@example.com,spouse@example.com"
+    )
+
+
+def test_run_scheduled_report_without_recipients_keeps_ambient_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # input: the daily job carries no recipients of its own
+    captured = _patch_jobs(monkeypatch)
+
+    # act
+    cli.run_scheduled_report(job="daily", max_turns=3)
+
+    # assert: the run happened and the ambient recipients were left alone
+    assert captured["max_turns"] == 3
+    assert os.environ["PENNY_REPORT_RECIPIENTS"] == _AMBIENT_RECIPIENTS
 
 
 def test_run_scheduled_report_unknown_job_fails_clearly(
