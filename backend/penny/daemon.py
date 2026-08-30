@@ -110,12 +110,18 @@ def _send_report(state: dict[str, Any], job: dict[str, Any], now_utc: datetime) 
     """Run one report job as a subprocess; only a success spends its period.
 
     The job subprocess resolves its own recipients from the ``[[jobs]]``
-    config, so the daemon passes nothing but the job's name.
+    config, so the daemon passes nothing but the job's name. ``_run_job`` has
+    already written the bare "ok" record to disk before this function ever
+    sees it, so a success's resolved period is persisted immediately here too
+    — otherwise a crash before ``_tick_reports``'s trailing ``write_state``
+    would leave the run recorded as ok yet still due, and the report would
+    send again on restart.
     """
     key = _report_state_key(job["name"])
     ok = _run_job(state, key, ["run-scheduled-report", "--job", job["name"]])
     if ok:
         state[key]["last_resolved_period"] = period_identity(job, now_utc=now_utc)
+        write_state(state)
 
 
 def _resolve_without_sending(
@@ -142,10 +148,12 @@ def _tick_reports(
     outage they lose exactly the occurrence they lost the slot for, and come
     due again at their next natural boundary; nothing retro-sends.
 
-    The pass owns persistence of the resolutions: the helpers above only
-    mutate ``state``, and one ``write_state`` at the end records every period
-    spent this pass (``_run_job`` still persists each run record as it
-    happens).
+    The pass owns persistence of the suppressed resolutions: ``_resolve_
+    without_sending`` only mutates ``state``, and the trailing ``write_state``
+    below records every one spent this pass. A successful send persists its
+    own resolved period immediately in ``_send_report`` (``_run_job`` already
+    writes the bare run record as it happens, so the resolved period can't
+    lag behind it across a crash).
     """
     due = _due_reports(state, now_utc, jobs)
     winners, suppressed = due[:max_emails_per_day], due[max_emails_per_day:]
