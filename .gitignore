@@ -8,6 +8,13 @@ __pycache__/
 .env.*
 !.env.example
 
+# Per-worktree PENNY_WORKSPACE override (not symlinked like .env/.env.*;
+# see backend/penny/cli.py and backend/penny/api/main.py)
+backend/.penny-workspace
+
+# Convention target for the above: an isolated per-worktree workspace dir
+.dev-workspace/
+
 # Node
 node_modules/
 dist/
