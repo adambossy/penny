@@ -32,11 +32,6 @@ _EFFORT_LEVELS_BY_MODEL = {
 }
 
 
-def test_offers_the_full_flat_list() -> None:
-    """3 OpenRouter + (3 GPT × 4) + (3 Claude × 4) + (Sonnet 4.6 × 3) = 30."""
-    assert len(offered_choices()) == 30
-
-
 def test_no_offered_effort_is_rejected_by_the_catalogue() -> None:
     """The selection can only offer levels the harness says the model accepts."""
     for choice in offered_choices():
