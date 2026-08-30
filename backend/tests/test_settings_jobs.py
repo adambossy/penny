@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from penny.settings import load_jobs, write_config
+from penny.settings import load_jobs, load_schedule, write_config
 
 
 def test_write_config_round_trips_jobs(isolated_workspace: Path) -> None:
@@ -114,3 +114,16 @@ def test_legacy_schedule_slot_seeds_the_default_weekly_job(
             "weekday": 5,
         }
     ]
+
+
+def test_schedule_round_trips_the_balances_hour(isolated_workspace: Path) -> None:
+    # input: a customized capture hour (hand-edited; init never prompts for it).
+    write_config({}, {"sync_interval_hours": 6, "balances_hour": 5}, [])
+
+    # act
+    output = load_schedule()
+
+    # assert: the hour survives the file, and the defaults fill the rest.
+    assert output["balances_hour"] == 5
+    assert output["sync_interval_hours"] == 6
+    assert output["max_emails_per_day"] == 1

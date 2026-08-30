@@ -436,6 +436,9 @@ def init() -> None:
             )
         ),
         "max_emails_per_day": int(prior_schedule["max_emails_per_day"]),
+        # Not prompted (hand-edit in config.toml); carried so a re-run of
+        # init never resets a customized capture hour.
+        "balances_hour": int(prior_schedule["balances_hour"]),
     }
     # The wizard configures one weekly report job (YAGNI: more jobs are a
     # hand-edit, not a UI). A config that already carries [[jobs]] is kept

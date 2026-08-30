@@ -1,10 +1,11 @@
 """``penny daemon`` — the local scheduler for sync and the report jobs.
 
 One long-lived process owning all scheduled work (the local replacement for
-the old Fly cron-manager): a Plaid sync every ``sync_interval_hours`` and any
-number of configured periodic report jobs (``[[jobs]]`` in the workspace
-``config.toml``, see ``penny.settings`` — each with its own period, calendar
-slot, recipients, and priority).
+the old Fly cron-manager): a Plaid sync every ``sync_interval_hours``, a
+daily balance capture at/after ``balances_hour`` (New-York local, like the
+report slots), and any number of configured periodic report jobs (``[[jobs]]``
+in the workspace ``config.toml``, see ``penny.settings`` — each with its own
+period, calendar slot, recipients, and priority).
 
 Report scheduling is period-identity based, not slot based: a job becomes
 eligible when its current period identity (``penny.services
@@ -77,6 +78,37 @@ def _due_sync(state: dict[str, Any], now: datetime, interval_hours: int) -> bool
     if not job.get("ok", True):
         return True  # a failed run retries on the next tick, not next interval
     return (now - datetime.fromisoformat(last)).total_seconds() >= interval_hours * 3600
+
+
+def _balances_job(hour: int) -> dict[str, Any]:
+    """The daily balance capture, phrased as a daily report-style job so the
+    calendar gate and period identity come from the one implementation in
+    ``penny.services.scheduled_reports`` (New-York wall clock and all)."""
+    return {"period": "daily", "hour": hour}
+
+
+def _due_balances(state: dict[str, Any], now_utc: datetime, hour: int) -> bool:
+    """Once per NY calendar day, at/after ``hour``; a failed run stays due."""
+    job = _balances_job(hour)
+    if not is_due_today(job, now_utc=now_utc):
+        return False
+    recorded = state.get("balances", {}).get("last_resolved_period")
+    return recorded != period_identity(job, now_utc=now_utc)
+
+
+def _capture_balances(state: dict[str, Any], now_utc: datetime, hour: int) -> None:
+    """Run the balance capture; only a success spends its day.
+
+    Mirrors ``_send_report``: a failure records no identity, so the job
+    retries on the next tick, and a slot missed while the machine slept runs
+    at the first tick of the day it wakes into.
+    """
+    ok = _run_job(state, "balances", ["capture-balances"])
+    if ok:
+        state["balances"]["last_resolved_period"] = period_identity(
+            _balances_job(hour), now_utc=now_utc
+        )
+        write_state(state)
 
 
 def _report_state_key(name: str) -> str:
@@ -176,8 +208,10 @@ def run_daemon() -> None:
     schedule = load_schedule()
     jobs = load_jobs()
     logger.info(
-        "penny daemon up: sync every {}h; report jobs [{}], max {} email(s)/day",
+        "penny daemon up: sync every {}h; balances daily at {}:00 NY; "
+        "report jobs [{}], max {} email(s)/day",
         schedule["sync_interval_hours"],
+        schedule["balances_hour"],
         ", ".join(job["name"] for job in jobs),
         schedule["max_emails_per_day"],
     )
@@ -186,5 +220,9 @@ def run_daemon() -> None:
         now = datetime.now(UTC)
         if _due_sync(state, now, schedule["sync_interval_hours"]):
             _run_job(state, "sync", ["sync"])
+        # Balances before reports, so a report sent this same tick can cite
+        # the day's fresh sample.
+        if _due_balances(state, now, schedule["balances_hour"]):
+            _capture_balances(state, now, schedule["balances_hour"])
         _tick_reports(state, now, jobs, schedule["max_emails_per_day"])
         time.sleep(_TICK_SECONDS)

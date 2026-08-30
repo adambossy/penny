@@ -34,6 +34,10 @@ SCHEDULE_DEFAULTS: dict[str, int] = {
     # come due together the highest-priority ones win and the rest resolve
     # without sending — so, in practice, at most this many a day.
     "max_emails_per_day": 1,
+    # Hour (New-York local, 0-23) at/after which the daily balance capture
+    # runs — ahead of the default 08:00 report slot so a morning report can
+    # cite the day's fresh balances.
+    "balances_hour": 6,
 }
 
 # The cadence fields each period type carries on top of the common ones
