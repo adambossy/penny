@@ -17,6 +17,9 @@ from sqlalchemy.dialects import postgresql
 from alembic import command
 from penny.adapters.db.facade import DB
 from penny.adapters.db.models import AccountBalance, PlaidAccount, PlaidItem
+
+# _alembic_ini is private, but it is the single owner of the checkout-vs-image
+# ini lookup; the public seam (upgrade_to_head) cannot render offline SQL.
 from penny.schema import _alembic_ini
 
 
