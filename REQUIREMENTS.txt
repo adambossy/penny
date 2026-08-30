@@ -132,6 +132,20 @@ P17. Hosted-data export (transient)
     single-player database, preserving category corrections and history that
     are not re-derivable from Plaid. It reads the source strictly read-only.
 
+P18. Daily account-balance history
+    Capture every linked account's current balances (via a live Plaid pull)
+    once per day into an append-only history the agent can query over
+    run_sql — one row per account per run, stamped with a UTC captured_at
+    (there is no bank-reported as-of time), kept forever, never deduped.
+    Each run also self-heals account registration: every account Plaid
+    returns has its name/type/subtype refreshed, and accounts missing from
+    the local registry are inserted. The job (`penny capture-balances`) is
+    run daily by the daemon at/after a configured New-York hour ([schedule]
+    balances_hour), skew-tolerant like the report jobs: a day missed while
+    the machine sleeps is captured at the first tick after wake, and a
+    failed run retries next tick. Failure semantics mirror P1 sync: a
+    broken connection is a reported user-action line, never an aborted run.
+
 
 TECHNICAL INVARIANTS / CONSTRAINTS
 ----------------------------------
@@ -184,9 +198,9 @@ T5. Config is the only runtime seam
 
 T6. Local scheduler contract
     Scheduled work runs through `penny daemon` invoking the CLI
-    (`penny sync`, `penny run-scheduled-report`) as contained subprocesses;
-    jobs are idempotent and skew-tolerant, and a job failure never kills the
-    scheduler loop.
+    (`penny sync`, `penny capture-balances`, `penny run-scheduled-report`)
+    as contained subprocesses; jobs are idempotent and skew-tolerant, and a
+    job failure never kills the scheduler loop.
 
 T7. Single source of truth
     Prompts live only in backend/.prompts/ (promptorium); taxonomy seed in
