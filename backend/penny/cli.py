@@ -89,12 +89,23 @@ async def _drive_agent(*, prompt_text: str, max_turns: int) -> bool:
     import contextlib
 
     from agent_harness.core.events import InMemoryEventBus
+    from agent_harness.extras.reminders import InMemoryReminderQueue
     from agent_harness.sessions.inmemory import InMemorySession
 
     from penny import observability
-    from penny.agent_factory import build_agent, build_model
+    from penny.agent_factory import (
+        announce_skill_manifest,
+        build_agent,
+        build_model,
+        load_skill_registry,
+    )
 
     session = InMemorySession(session_id=f"cli-{datetime.now(UTC):%Y%m%d%H%M%S}")
+    # A scheduled/headless run gets no app-provisioned reminder queue (that's
+    # website-only, see api/routes.py) — a plain in-memory one is enough to
+    # carry the skill manifest into this run's first turn.
+    reminders = InMemoryReminderQueue()
+    await announce_skill_manifest(reminders, session.session_id, load_skill_registry())
     # max_turns is accepted for parity with the legacy CLI surface; the harness
     # loop is currently bounded by the model producing a final output. Logged so
     # the value is visible in job logs.
@@ -112,6 +123,7 @@ async def _drive_agent(*, prompt_text: str, max_turns: int) -> bool:
             model=build_model(),
             session=session,
             persist_session=False,
+            reminders=reminders,
         )
         result = await agent.run(prompt_text, event_bus=bus)
     finally:

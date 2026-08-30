@@ -222,7 +222,12 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
 
     @router.post("/chat")
     async def chat(request: Request) -> StreamingResponse:
-        from penny.agent_factory import build_agent, build_model
+        from penny.agent_factory import (
+            announce_skill_manifest,
+            build_agent,
+            build_model,
+            load_skill_registry,
+        )
 
         body: dict[str, Any] = await request.json()
         chat_id = str(body.get("id") or "default")
@@ -280,6 +285,9 @@ def build_router(*, turn_wiring: TurnWiring) -> APIRouter:
             try:
                 async with turn_wiring.turn(chat_id) as provision:
                     await _maybe_enqueue_onboarding(chat_id, provision.reminders)
+                    await announce_skill_manifest(
+                        provision.reminders, chat_id, load_skill_registry()
+                    )
                     from penny.api.persistence.onboarding import resolve
 
                     agent = build_agent(
