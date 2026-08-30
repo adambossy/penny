@@ -368,8 +368,7 @@ def _subagent_toolset(agent: Agent, registry: SubagentRegistry) -> StaticToolset
     ``build_agent_tool`` spawns a child inheriting ``agent``'s
     model/toolsets/sandbox, so this can only run once ``agent`` exists —
     called after construction in :func:`build_agent`, never passed into
-    ``toolsets=``. Currently ``.agent/agents/`` holds no definitions, so this
-    is an empty toolset until one is authored there.
+    ``toolsets=``.
     """
     return StaticToolset(
         name="subagents",
