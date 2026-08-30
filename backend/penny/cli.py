@@ -396,17 +396,16 @@ def init() -> None:
         default=prior_env.get("SMTP_USERNAME", ""),
     )
 
+    # Unprompted schedule keys (email cap, balances hour) carry over from the
+    # stored config so a re-run of init never resets a hand-edit.
     schedule = {
+        **prior_schedule,
         "sync_interval_hours": int(
             typer.prompt(
                 "Sync every N hours",
                 default=str(prior_schedule["sync_interval_hours"]),
             )
         ),
-        "max_emails_per_day": int(prior_schedule["max_emails_per_day"]),
-        # Not prompted (hand-edit in config.toml); carried so a re-run of
-        # init never resets a customized capture hour.
-        "balances_hour": int(prior_schedule["balances_hour"]),
     }
     # The wizard configures one weekly report job (YAGNI: more jobs are a
     # hand-edit, not a UI). A config that already carries [[jobs]] is kept
