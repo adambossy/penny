@@ -80,54 +80,58 @@ def _due_sync(state: dict[str, Any], now: datetime, interval_hours: int) -> bool
     return (now - datetime.fromisoformat(last)).total_seconds() >= interval_hours * 3600
 
 
-def _balances_job(hour: int) -> dict[str, Any]:
-    """The daily balance capture, phrased as a daily report-style job so the
-    calendar gate and period identity come from the one implementation in
-    ``penny.services.scheduled_reports`` (New-York wall clock and all)."""
-    return {"period": "daily", "hour": hour}
-
-
-def _due_balances(state: dict[str, Any], now_utc: datetime, hour: int) -> bool:
-    """Once per NY calendar day, at/after ``hour``; a failed run stays due."""
-    job = _balances_job(hour)
-    if not is_due_today(job, now_utc=now_utc):
-        return False
-    recorded = state.get("balances", {}).get("last_resolved_period")
-    return recorded != period_identity(job, now_utc=now_utc)
-
-
-def _capture_balances(state: dict[str, Any], now_utc: datetime, hour: int) -> None:
-    """Run the balance capture; only a success spends its day.
-
-    Mirrors ``_send_report``: a failure records no identity, so the job
-    retries on the next tick, and a slot missed while the machine slept runs
-    at the first tick of the day it wakes into.
-    """
-    ok = _run_job(state, "balances", ["capture-balances"])
-    if ok:
-        state["balances"]["last_resolved_period"] = period_identity(
-            _balances_job(hour), now_utc=now_utc
-        )
-        write_state(state)
-
-
 def _report_state_key(name: str) -> str:
     """Report jobs are namespaced in state so they can never shadow "sync"."""
     return f"{REPORT_STATE_PREFIX}{name}"
 
 
-def _report_is_due(
-    state: dict[str, Any], job: dict[str, Any], now_utc: datetime
+# The daily balance capture, phrased as a report-shaped job (minus a state
+# namespace and the email cap) so the calendar gate, period identity, and
+# only-success-spends-the-period semantics all come from the one periodic
+# machine below — New-York wall clock and all.
+def _balances_job(hour: int) -> dict[str, Any]:
+    return {"period": "daily", "hour": hour}
+
+
+def _periodic_is_due(
+    state: dict[str, Any], key: str, job: dict[str, Any], now_utc: datetime
 ) -> bool:
     """Calendar gate open AND this occurrence of the period not yet resolved.
 
-    A failed send never records the identity, so the job stays due on the next
+    A failed run never records the identity, so the job stays due on the next
     tick — success (or cap-suppression) is what advances a job.
     """
     if not is_due_today(job, now_utc=now_utc):
         return False
-    recorded = state.get(_report_state_key(job["name"]), {}).get("last_resolved_period")
+    recorded = state.get(key, {}).get("last_resolved_period")
     return recorded != period_identity(job, now_utc=now_utc)
+
+
+def _run_periodic(
+    state: dict[str, Any],
+    key: str,
+    job: dict[str, Any],
+    argv: list[str],
+    now_utc: datetime,
+) -> None:
+    """Run one periodic job as a subprocess; only a success spends its period.
+
+    ``_run_job`` has already written the bare "ok" record to disk before this
+    function ever sees it, so a success's resolved period is persisted
+    immediately here too — otherwise a crash right after this call returns
+    would leave the run recorded as ok yet still due, and the job would run
+    again on restart.
+    """
+    ok = _run_job(state, key, argv)
+    if ok:
+        state[key]["last_resolved_period"] = period_identity(job, now_utc=now_utc)
+        write_state(state)
+
+
+def _report_is_due(
+    state: dict[str, Any], job: dict[str, Any], now_utc: datetime
+) -> bool:
+    return _periodic_is_due(state, _report_state_key(job["name"]), job, now_utc)
 
 
 def _due_reports(
@@ -139,20 +143,15 @@ def _due_reports(
 
 
 def _send_report(state: dict[str, Any], job: dict[str, Any], now_utc: datetime) -> None:
-    """Run one report job as a subprocess; only a success spends its period.
-
-    The job subprocess resolves its own recipients from the ``[[jobs]]``
-    config, so the daemon passes nothing but the job's name. ``_run_job`` has
-    already written the bare "ok" record to disk before this function ever
-    sees it, so a success's resolved period is persisted immediately here too
-    — otherwise a crash right after this call returns would leave the run
-    recorded as ok yet still due, and the report would send again on restart.
-    """
-    key = _report_state_key(job["name"])
-    ok = _run_job(state, key, ["run-scheduled-report", "--job", job["name"]])
-    if ok:
-        state[key]["last_resolved_period"] = period_identity(job, now_utc=now_utc)
-        write_state(state)
+    """The job subprocess resolves its own recipients from the ``[[jobs]]``
+    config, so the daemon passes nothing but the job's name."""
+    _run_periodic(
+        state,
+        _report_state_key(job["name"]),
+        job,
+        ["run-scheduled-report", "--job", job["name"]],
+        now_utc,
+    )
 
 
 def _resolve_without_sending(
@@ -222,7 +221,8 @@ def run_daemon() -> None:
             _run_job(state, "sync", ["sync"])
         # Balances before reports, so a report sent this same tick can cite
         # the day's fresh sample.
-        if _due_balances(state, now, schedule["balances_hour"]):
-            _capture_balances(state, now, schedule["balances_hour"])
+        balances_job = _balances_job(schedule["balances_hour"])
+        if _periodic_is_due(state, "balances", balances_job, now):
+            _run_periodic(state, "balances", balances_job, ["capture-balances"], now)
         _tick_reports(state, now, jobs, schedule["max_emails_per_day"])
         time.sleep(_TICK_SECONDS)
