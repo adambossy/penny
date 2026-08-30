@@ -8,6 +8,7 @@ from typing import TypedDict
 from sqlalchemy import (
     JSON,
     TIMESTAMP,
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -436,6 +437,11 @@ class PlaidAccount(Base):
 
     ``account_id`` matches Plaid's account id string and the existing
     ``account_sign_conventions.account_id``.
+
+    ``name`` / ``type`` / ``subtype`` mirror Plaid's account descriptors and
+    are refreshed by the daily balance capture (which also registers accounts
+    it discovers). Nullable: a stale registered account Plaid no longer
+    returns can never be populated. Kept in sync with migration 031.
     """
 
     __tablename__ = "plaid_accounts"
@@ -445,8 +451,59 @@ class PlaidAccount(Base):
         String, ForeignKey("plaid_items.item_id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Plaid's account taxonomy, e.g. type='credit', subtype='credit card'.
+    type: Mapped[str | None] = mapped_column(String, nullable=True)
+    subtype: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    balances: Mapped[list[AccountBalance]] = relationship(
+        "AccountBalance", back_populates="account", cascade="all, delete-orphan"
+    )
+
+
+class AccountBalance(Base):
+    """Append-only daily sample of one account's balances.
+
+    The balance-capture job inserts one row per account per run and never
+    updates or dedupes — history is the point, so rows are kept forever.
+    ``captured_at`` is UTC and records when *we* asked Plaid; there is no
+    bank-reported as-of column because Plaid's ``last_updated_datetime`` is
+    unpopulated for this user's institutions. Sign follows the account type:
+    depository/investment balances are positive holdings, credit/loan
+    balances are positive amounts OWED. Kept in sync with migration 031.
+    """
+
+    __tablename__ = "account_balances"
+    __table_args__ = (
+        # Latest-per-account and per-account history reads.
+        Index("idx_account_balances_account_captured", "account_id", "captured_at"),
+    )
+
+    # Surrogate bigint: an append-only table accrues rows indefinitely.
+    # SQLite needs the plain-Integer variant for rowid autoincrement.
+    balance_id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    account_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("plaid_accounts.account_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    captured_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
+    current_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # available and limit are frequently null — plenty of institutions
+    # report neither.
+    available_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    limit_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    currency: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Relationships
+    account: Mapped[PlaidAccount] = relationship(
+        "PlaidAccount", back_populates="balances"
     )
 
 

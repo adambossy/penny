@@ -30,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from penny.adapters.db.models import (
+    AccountBalance,
     AccountSignConvention,
     AmazonItemDB,
     AmazonLoginProfileDB,
@@ -43,6 +44,7 @@ from penny.adapters.db.models import (
     EvalRun,
     Merchant,
     PendingReceiptMatch,
+    PlaidAccount,
     PlaidItem,
     PlaidTransaction,
     SaveOutcome,
@@ -85,6 +87,8 @@ _COMPACT_SCHEMA_MODELS: tuple[type[Base], ...] = (
     EmailReceipt,
     PendingReceiptMatch,
     AccountSignConvention,
+    PlaidAccount,
+    AccountBalance,
 )
 
 _COMPACT_SCHEMA_NOTES: dict[str, str] = {
@@ -169,6 +173,26 @@ _COMPACT_SCHEMA_NOTES: dict[str, str] = {
         "LEFT JOIN account_sign_conventions a ON a.account_id = pt.account_id, "
         "then use CASE WHEN COALESCE(a.sign_convention, 'expense_positive') = "
         "'expense_negative' THEN -pt.amount_cents ELSE pt.amount_cents END."
+    ),
+    "plaid_accounts": (
+        "One row per linked bank account (dimension table); account_id matches "
+        "plaid_transactions.account_id and account_balances.account_id. "
+        "name/type/subtype mirror Plaid's account descriptors (e.g. "
+        "type='credit', subtype='credit card') and may be NULL for stale "
+        "accounts the bank no longer reports."
+    ),
+    "account_balances": (
+        "Append-only history of account balance samples: the daily capture job "
+        "inserts one row per account per run, never updates or dedupes, and "
+        "rows are kept forever. captured_at is UTC and records when the "
+        "balance was pulled from Plaid (there is no bank-reported as-of time). "
+        "Sign follows the account type: depository/investment balances are "
+        "positive holdings, while credit and loan balances are positive "
+        "amounts OWED — do not negate them. available_cents and limit_cents "
+        "are NULL when the institution does not report them. "
+        "JOIN plaid_accounts for the account's name/type/subtype. "
+        "Latest balance per account: the row with MAX(captured_at) per "
+        "account_id."
     ),
 }
 
@@ -1378,6 +1402,51 @@ class DB:
         """True when at least one Plaid item is linked."""
         with self.session() as session:  # type: Session
             return session.query(PlaidItem.item_id).first() is not None
+
+    def register_plaid_accounts(
+        self, item_id: str, accounts: Sequence[dict[str, Any]]
+    ) -> int:
+        """Upsert one item's account descriptors; return how many were new.
+
+        The balance-capture job's self-healing registration: every account
+        Plaid returns gets its ``name`` / ``type`` / ``subtype`` refreshed,
+        and accounts missing from ``plaid_accounts`` (e.g. ones an old
+        backfill never saw in transactions) are inserted. Each ``accounts``
+        dict carries ``account_id`` plus optional ``name`` / ``type`` /
+        ``subtype``. Idempotent — re-registering is a no-op update.
+        """
+        inserted = 0
+        with self.session() as session:  # type: Session
+            for account in accounts:
+                row = session.get(PlaidAccount, account["account_id"])
+                if row is None:
+                    session.add(
+                        PlaidAccount(
+                            account_id=account["account_id"],
+                            item_id=item_id,
+                            name=account.get("name"),
+                            type=account.get("type"),
+                            subtype=account.get("subtype"),
+                        )
+                    )
+                    inserted += 1
+                else:
+                    row.name = account.get("name")
+                    row.type = account.get("type")
+                    row.subtype = account.get("subtype")
+        return inserted
+
+    def add_account_balances(self, rows: Sequence[dict[str, Any]]) -> int:
+        """Append balance samples (one row each); return how many were written.
+
+        Append-only by design: no upsert, no dedupe — each capture run adds a
+        fresh sample per account. Each dict carries ``account_id`` and
+        ``captured_at`` plus the nullable ``current_cents`` /
+        ``available_cents`` / ``limit_cents`` / ``currency``.
+        """
+        with self.session() as session:  # type: Session
+            session.add_all(AccountBalance(**row) for row in rows)
+        return len(rows)
 
     def migrate_plaid_item_identity(
         self,
