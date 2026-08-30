@@ -71,7 +71,8 @@ _EFFORT_LABELS: dict[Effort, str] = {
 # catalogue accepts; the others are offered bare (no effort on the wire).
 _OFFERED: tuple[tuple[ProviderFamily, str, str, bool], ...] = (
     ("openrouter", _openrouter.KIMI_K3, "Kimi K3", False),
-    ("openrouter", _openrouter.GLM_5_2, "GLM-5.2", False),
+    ("openrouter", _openrouter.GLM_5_3, "GLM-5.3", False),
+    ("openrouter", _openrouter.GLM_5_3_FLASH, "GLM-5.3 Flash", False),
     ("openai", _openai.GPT_5_6_SOL, "GPT 5.6 Sol", True),
     ("openai", _openai.GPT_5_6_TERRA, "GPT 5.6 Terra", True),
     ("openai", _openai.GPT_5_5, "GPT 5.5", True),

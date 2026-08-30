@@ -60,7 +60,7 @@ def test_config_lists_the_offered_choices(isolated_db) -> None:
         r = client.get("/api/config")
 
     models = r.json()["models"]
-    assert len(models) == 29
+    assert len(models) == 30
     assert all(set(entry) == {"key", "label"} for entry in models)
     keys = {entry["key"] for entry in models}
     assert "claude-opus-5:xhigh" in keys

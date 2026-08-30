@@ -18,7 +18,8 @@ from agent_harness.providers.anthropic import OPUS_5, AnthropicMessagesModel
 from agent_harness.providers.google import GeminiModel
 from agent_harness.providers.openai import GPT_5_6_SOL, OpenAIResponsesModel
 from agent_harness.providers.openrouter import (
-    GLM_5_2,
+    GLM_5_3,
+    GLM_5_3_FLASH,
     KIMI_K3,
     US_FP8_ZDR,
     OpenRouterModel,
@@ -106,7 +107,13 @@ def test_kimi_k3_pins_moonshot_direct_routing() -> None:
 
 def test_glm_keeps_the_harness_default_routing() -> None:
     """Only K3 needs the opt-in; GLM stays on the vetted US/FP8/ZDR set."""
-    model = build_model(name=GLM_5_2)
+    model = build_model(name=GLM_5_3)
+    assert model.routing == US_FP8_ZDR
+
+
+def test_glm_flash_keeps_the_harness_default_routing() -> None:
+    """GLM-5.3-Flash is routed the same as GLM-5.3."""
+    model = build_model(name=GLM_5_3_FLASH)
     assert model.routing == US_FP8_ZDR
 
 
