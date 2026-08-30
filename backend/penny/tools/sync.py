@@ -59,7 +59,7 @@ async def sync_status() -> dict[str, Any]:
     from datetime import UTC, datetime
 
     def _run() -> dict[str, Any]:
-        from penny.daemon_state import read_state
+        from penny.daemon_state import read_state, report_job_states
 
         state = read_state()
         newest = get_db().max_plaid_transaction_created_at()
@@ -68,7 +68,7 @@ async def sync_status() -> dict[str, Any]:
             "status": "success",
             "last_sync_at": sync_state.get("last_run_at"),
             "last_sync_ok": sync_state.get("ok"),
-            "last_report": state.get("report"),
+            "report_jobs": report_job_states(state),
             "newest_transaction_at": newest.isoformat() if newest else None,
             "now": datetime.now(UTC).isoformat(),
             "daemon_state_present": bool(state),

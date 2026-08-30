@@ -13,9 +13,23 @@ from typing import Any
 
 from penny.workspace import resolve_logs_dir
 
+REPORT_STATE_PREFIX = "report:"
+
 
 def state_path() -> Path:
     return resolve_logs_dir() / "daemon-state.json"
+
+
+def report_job_states(state: dict[str, Any]) -> dict[str, Any]:
+    """Every report job's state, keyed by job name (the ``report:`` prefix
+    stripped). Report jobs are namespaced in ``state`` so they can never
+    shadow the ``"sync"`` entry; this is the one place that un-namespaces
+    them."""
+    return {
+        name.removeprefix(REPORT_STATE_PREFIX): job_state
+        for name, job_state in state.items()
+        if name.startswith(REPORT_STATE_PREFIX)
+    }
 
 
 def read_state() -> dict[str, Any]:
