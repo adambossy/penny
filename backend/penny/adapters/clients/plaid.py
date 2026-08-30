@@ -33,6 +33,27 @@ class PlaidClientError(Exception):
     """Base error for Plaid client failures."""
 
 
+# Plaid item error_codes that mean "the user must re-authenticate (relink) this
+# bank connection" — as opposed to a transient/network blip. Owned here so every
+# consumer (sync, connection-status tool, balance capture) classifies the wire
+# format the same way.
+RELINK_ERROR_CODES = frozenset(
+    {
+        "ITEM_LOGIN_REQUIRED",
+        "PENDING_EXPIRATION",
+        "INVALID_CREDENTIALS",
+        "INVALID_MFA",
+        "ITEM_LOCKED",
+        "USER_PERMISSION_REVOKED",
+    }
+)
+
+
+def is_relink_error(exc: BaseException) -> bool:
+    """True when ``exc`` carries a Plaid re-auth error code (relink needed)."""
+    return any(code in str(exc) for code in RELINK_ERROR_CODES)
+
+
 PLAID_ENV_MAP: dict[PlaidEnv, str] = {
     "sandbox": "https://sandbox.plaid.com",
     "development": "https://development.plaid.com",

@@ -14,7 +14,11 @@ from typing import Any
 
 from agent_harness import tool
 
-from penny.adapters.clients.plaid import PlaidClient, PlaidClientError
+from penny.adapters.clients.plaid import (
+    RELINK_ERROR_CODES,
+    PlaidClient,
+    PlaidClientError,
+)
 from penny.db import get_db
 
 
@@ -42,20 +46,6 @@ async def list_plaid_accounts() -> dict[str, Any]:
 
     items = await asyncio.to_thread(_fetch)
     return {"items": [_item_to_dict(it) for it in items], "count": len(items)}
-
-
-# Plaid error_codes that mean the user must re-authenticate (relink) the item
-# before syncs resume. Mirrors sync_service._PLAID_RELINK_CODES.
-_RELINK_CODES = frozenset(
-    {
-        "ITEM_LOGIN_REQUIRED",
-        "PENDING_EXPIRATION",
-        "INVALID_CREDENTIALS",
-        "INVALID_MFA",
-        "ITEM_LOCKED",
-        "USER_PERMISSION_REVOKED",
-    }
-)
 
 
 @tool
@@ -86,7 +76,7 @@ async def plaid_connection_status() -> dict[str, Any]:
                 # An /item/get failure is itself a health signal — surface it as a
                 # relink candidate rather than hiding the connection.
                 error_code = _error_code_from(str(exc))
-            needs_relink = bool(error_code) and error_code in _RELINK_CODES
+            needs_relink = bool(error_code) and error_code in RELINK_ERROR_CODES
             out.append(
                 {
                     "item_id": item.item_id,
@@ -109,7 +99,7 @@ async def plaid_connection_status() -> dict[str, Any]:
 
 def _error_code_from(message: str) -> str | None:
     """Extract a known relink error_code embedded in a Plaid error message."""
-    for code in _RELINK_CODES:
+    for code in RELINK_ERROR_CODES:
         if code in message:
             return code
     return None
