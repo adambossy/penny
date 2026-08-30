@@ -182,6 +182,45 @@ def test_successful_send_persists_resolved_period_before_returning(
     assert "last_resolved_period" in snapshots[-1]["report:weekly"]
 
 
+def test_suppressed_jobs_persist_before_any_winner_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Suppression must be durable before a (possibly slow) winner subprocess runs.
+
+    A crash mid-winner-subprocess must not leave a cap-suppressed job looking
+    still due — otherwise it wins the next tick's slot too and the daemon
+    sends more than ``max_emails_per_day`` for the day. Regression for a
+    Bugbot finding: an earlier fix persisted a winner's own resolution
+    immediately but left suppressed resolutions to a trailing ``write_state``
+    after every winner had already run.
+    """
+    snapshots: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        daemon, "write_state", lambda state: snapshots.append({**state})
+    )
+
+    def run(state: dict[str, Any], name: str, argv: list[str]) -> bool:
+        # By the time a winner's subprocess is "running", the suppressed
+        # job's resolution must already be on disk.
+        assert any("report:daily" in snap for snap in snapshots), (
+            "daily should have been resolved before weekly's job ran"
+        )
+        state[name] = {
+            "last_run_at": datetime.now(UTC).isoformat(),
+            "ok": True,
+            "detail": "",
+        }
+        return True
+
+    monkeypatch.setattr(daemon, "_run_job", run)
+    state: dict[str, Any] = {}
+
+    _tick_reports(state, _MONDAY_9AM, [_DAILY, _WEEKLY], 1)
+
+    assert "last_resolved_period" in state["report:daily"]
+    assert "last_resolved_period" in state["report:weekly"]
+
+
 def test_failed_send_does_not_advance_the_period(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

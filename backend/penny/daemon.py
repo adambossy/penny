@@ -113,9 +113,8 @@ def _send_report(state: dict[str, Any], job: dict[str, Any], now_utc: datetime) 
     config, so the daemon passes nothing but the job's name. ``_run_job`` has
     already written the bare "ok" record to disk before this function ever
     sees it, so a success's resolved period is persisted immediately here too
-    — otherwise a crash before ``_tick_reports``'s trailing ``write_state``
-    would leave the run recorded as ok yet still due, and the report would
-    send again on restart.
+    — otherwise a crash right after this call returns would leave the run
+    recorded as ok yet still due, and the report would send again on restart.
     """
     key = _report_state_key(job["name"])
     ok = _run_job(state, key, ["run-scheduled-report", "--job", job["name"]])
@@ -142,23 +141,23 @@ def _tick_reports(
     jobs: list[dict[str, Any]],
     max_emails_per_day: int,
 ) -> None:
-    """One scheduling pass: send the top jobs, resolve the suppressed rest.
+    """One scheduling pass: resolve the suppressed rest, then send the winners.
 
     Suppressed jobs are resolved for their *current* period only — after an
     outage they lose exactly the occurrence they lost the slot for, and come
     due again at their next natural boundary; nothing retro-sends.
 
-    The pass owns persistence of the suppressed resolutions: ``_resolve_
-    without_sending`` only mutates ``state``, and the trailing ``write_state``
-    below records every one spent this pass. A successful send persists its
-    own resolved period immediately in ``_send_report`` (``_run_job`` already
-    writes the bare run record as it happens, so the resolved period can't
-    lag behind it across a crash).
+    Suppression is persisted *before* any winner's subprocess runs, and each
+    winner persists its own resolution as it succeeds (see ``_send_report``).
+    One scheduling pass therefore never straddles a single unpersisted
+    decision across a subprocess call: earlier revisions wrote suppressed
+    resolutions only in a trailing ``write_state`` after every winner had run,
+    so a crash during a later winner's (possibly slow) subprocess left the
+    suppressed jobs' periods unresolved — still "due" — letting them send on
+    the very next tick and blow past ``max_emails_per_day``.
     """
     due = _due_reports(state, now_utc, jobs)
     winners, suppressed = due[:max_emails_per_day], due[max_emails_per_day:]
-    for job in winners:
-        _send_report(state, job, now_utc)
     if suppressed:
         detail = (
             f"resolved without sending: suppressed by "
@@ -167,8 +166,9 @@ def _tick_reports(
         )
         for job in suppressed:
             _resolve_without_sending(state, job, now_utc, detail)
-    if due:
         write_state(state)
+    for job in winners:
+        _send_report(state, job, now_utc)
 
 
 def run_daemon() -> None:
