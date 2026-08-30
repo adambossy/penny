@@ -184,7 +184,10 @@ Run these before completing any unit of work. There is no mypy gate yet.
 - **Errors**: stream-level failures surface as `{type:"error"}` SSE frames →
   red banner in ChatScreen; tool failures as `tool-output-error` frames.
 - **Workspace**: `~/.penny` (memory/, reports/, logs/, config.toml,
-  user_id); an existing `~/.transactoid` is used as-is.
+  user_id); an existing `~/.transactoid` is used as-is. `backend/.env`'s
+  `PENNY_WORKSPACE` is symlinked into every worktree identically; a
+  gitignored `backend/.penny-workspace` overrides it per-worktree without
+  touching that shared file.
 - **Branching**: `main` is the single long-lived branch; feature branches
   merge back into it. `legacy/saas-monolith` is the permanent pre-split
   freeze — never rebase, rewrite, or delete it.
