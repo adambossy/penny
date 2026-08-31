@@ -111,7 +111,14 @@ P14. CLI onboarding
 
 P15. Local web app, no accounts
     `penny serve` runs the complete product in one process on
-    127.0.0.1:8000 — API plus the built web UI. There are no accounts, no
+    127.0.0.1:8000 — API plus the built web UI. Both single-player front
+    doors serve that UI: `penny serve` and the default ASGI instance
+    (`penny.api.main:app`) resolve it through the same helper, so a
+    checkout cannot serve the app one way and 404 it the other. An unbuilt
+    frontend degrades to API-only (the Vite dev server proxies to it); an
+    explicit `--frontend-dir` that is not a directory is a hard error, not
+    that degrade. The UI is found relative to the repo checkout, so an
+    installed-from-wheel Penny serves API-only. There are no accounts, no
     sign-in, no landing page. Remote access (e.g. from a phone) is the
     user's network choice: Tailscale is the documented path; a bare ngrok
     URL is warned against. Penny ships no auth layer of its own.
@@ -207,6 +214,15 @@ T7. Single source of truth
     backend/configs/taxonomy.yaml; runtime config in the PENNY_* contract;
     skills in backend/.agent/skills (the plugin symlinks them). No value is
     duplicated across homes.
+
+    penny.prompts is the ONLY door to promptorium, and it anchors the
+    prompt root to the package rather than the process's working
+    directory. promptorium's own loader walks up from the CWD and creates
+    what it does not find, so a CWD-relative load silently resolves to a
+    different (often empty) prompt directory per entrypoint. Entrypoints
+    whose CWD Penny does not control make this load-bearing, not stylistic:
+    the P4 daemon runs from `/` and `penny mcp` (P16) inherits the user's
+    project directory.
 
 T8. One database, one user
     Finance and app-bookkeeping tables live in ONE database (the app tables
