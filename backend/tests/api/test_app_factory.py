@@ -8,11 +8,12 @@ TurnWiring, and an extra router must all be honored.
 from __future__ import annotations
 
 import contextlib
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.testclient import TestClient
 
-from penny.api.app import AppConfig, TurnProvision, create_app
+from penny.api.app import AppConfig, TurnProvision, create_app, default_static_dir
 
 
 def _auth_dependency(request: Request) -> None:
@@ -70,12 +71,33 @@ def test_default_app_needs_no_auth(isolated_db):
     assert client.get("/api/health").json() == {"ok": True}
 
 
+def test_default_instance_mounts_the_ui_that_default_static_dir_resolves():
+    """The actual regression: `penny.api.main` was built as a bare
+    `create_app()`, so the documented dev-loop command served /api but 404'd
+    `/` and every SPA route while `penny serve` worked — one checkout, two
+    answers (P15).
+
+    `create_app`'s own static handling was never broken, so exercising that
+    would pass against the bug; what has to be pinned is main.py's *wiring*.
+    Phrased as an equality with `default_static_dir()` so it holds either way:
+    an unbuilt checkout legitimately mounts nothing.
+    """
+    import penny.api.main as main
+
+    expected = default_static_dir()
+    mounts = [r for r in main.app.routes if getattr(r, "name", None) == "frontend"]
+
+    if expected is None:
+        assert not mounts, "nothing built, so nothing should be mounted"
+    else:
+        assert mounts, "the default instance must mount the built UI"
+        assert Path(mounts[0].app.directory) == expected
+
+
 def test_static_dir_serves_the_spa_without_shadowing_the_api(isolated_db, tmp_path):
     """A mounted UI answers `/` and every client-side route, and only those.
 
-    The regression: the default ASGI instance mounted no frontend, so `/` and
-    every SPA route 404'd while `/api` worked — "the app is down" (P15). The
-    other half matters just as much: the SPA fallback must not swallow unknown
+    The half that is easy to lose: the SPA fallback must not swallow unknown
     /api paths into index.html, which would turn a typo'd endpoint into a 200
     page for any client.
     """
