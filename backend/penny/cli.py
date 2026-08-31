@@ -596,7 +596,7 @@ def serve(
         # An explicit --frontend-dir that doesn't exist is a typo, not the
         # API-only case: fail rather than silently serving no UI.
         static = Path(frontend_dir).expanduser()
-        if not static.exists():
+        if not static.is_dir():
             typer.echo(f"Frontend dir not found: {static}", err=True)
             raise typer.Exit(1)
     else:

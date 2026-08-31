@@ -44,8 +44,5 @@ from penny.observability import init_sentry  # noqa: E402
 # request-handler failures are reported. Idempotent + no-op when unconfigured.
 init_sentry()
 
-# Serve the built web UI when there is one, exactly as `penny serve` does.
-# Without this the two front doors disagree: `uvicorn penny.api.main:app` --
-# the documented dev-loop command -- answered /api but 404'd `/` and every SPA
-# route, which reads as "the app is down" rather than "the UI isn't mounted".
+# Serve the built web UI, same as `penny serve` (see `default_static_dir`).
 app = create_app(AppConfig(static_dir=default_static_dir()))
