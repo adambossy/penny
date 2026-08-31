@@ -37,11 +37,12 @@ apply_config_to_env()
 # Import _logging first so the file sink is installed before anything
 # downstream emits its first log line.
 from penny import _logging  # noqa: E402, F401  side-effect: install file sink
-from penny.api.app import create_app  # noqa: E402
+from penny.api.app import AppConfig, create_app, default_static_dir  # noqa: E402
 from penny.observability import init_sentry  # noqa: E402
 
 # Initialize error tracking before the app is built so startup and
 # request-handler failures are reported. Idempotent + no-op when unconfigured.
 init_sentry()
 
-app = create_app()
+# Serve the built web UI, same as `penny serve` (see `default_static_dir`).
+app = create_app(AppConfig(static_dir=default_static_dir()))

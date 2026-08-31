@@ -586,21 +586,21 @@ def serve(
 
     import uvicorn
 
-    from penny.api.app import AppConfig, create_app
+    from penny.api.app import AppConfig, create_app, default_static_dir
     from penny.bootstrap import prepare_database
 
     prepare_database()
 
-    static: Path | None = None
+    static: Path | None
     if frontend_dir is not None:
+        # An explicit --frontend-dir that doesn't exist is a typo, not the
+        # API-only case: fail rather than silently serving no UI.
         static = Path(frontend_dir).expanduser()
+        if not static.is_dir():
+            typer.echo(f"Frontend dir not found: {static}", err=True)
+            raise typer.Exit(1)
     else:
-        candidate = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
-        if candidate.exists():
-            static = candidate
-    if static is not None and not static.exists():
-        typer.echo(f"Frontend dir not found: {static}", err=True)
-        raise typer.Exit(1)
+        static = default_static_dir()
     if static is None:
         typer.echo(
             "No built frontend found — serving the API only. "
