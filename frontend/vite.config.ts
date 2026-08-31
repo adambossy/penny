@@ -50,6 +50,12 @@ if (agentUiSrc) {
   console.warn(`[vite] agent-ui aliased to LOCAL source: ${agentUiSrc}`);
 }
 
+// The app identity stamped into every build (frontend/app-id.json) — the
+// single source both this plugin and `penny serve`'s verifier
+// (backend/penny/cli.py) read, so the two languages can't drift apart on
+// what "built by this app" means.
+const APP_ID = JSON.parse(fs.readFileSync(path.join(__dirname, "app-id.json"), "utf-8")).app;
+
 // Stamp the build so `penny serve` can tell a dist built by this app from a
 // stale or foreign one — and, via `builtAt`, tell an up-to-date build from
 // one that predates a later source/dependency change. serve refuses a
@@ -65,11 +71,7 @@ function buildStamp() {
     closeBundle() {
       fs.writeFileSync(
         path.join(outDir, "penny-build.json"),
-        JSON.stringify(
-          { app: "penny-single-player", builtAt: new Date().toISOString() },
-          null,
-          2,
-        ) + "\n",
+        JSON.stringify({ app: APP_ID, builtAt: new Date().toISOString() }, null, 2) + "\n",
       );
     },
   };

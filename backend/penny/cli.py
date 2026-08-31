@@ -553,6 +553,19 @@ def daemon_status() -> None:
     typer.echo(_json.dumps(state, indent=2))
 
 
+def _expected_app_id() -> str:
+    """The app identity every build stamps (``frontend/app-id.json``).
+
+    The single source both ``vite.config.ts`` and this verifier read, so the
+    two languages can't drift apart on what "built by this app" means.
+    """
+    import json
+
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    path = repo_root / "frontend" / "app-id.json"
+    return json.loads(path.read_text(encoding="utf-8"))["app"]
+
+
 def _frontend_build_stamp(dist: Path) -> dict | None:
     """This app's build stamp (``penny-build.json``), or ``None`` if absent/corrupt/foreign.
 
@@ -567,7 +580,7 @@ def _frontend_build_stamp(dist: Path) -> dict | None:
         stamp = json.loads((dist / "penny-build.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(stamp, dict) or stamp.get("app") != "penny-single-player":
+    if not isinstance(stamp, dict) or stamp.get("app") != _expected_app_id():
         return None
     return stamp
 
