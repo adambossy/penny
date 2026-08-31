@@ -595,7 +595,13 @@ def _frontend_newest_source_mtime(frontend_dir: Path) -> float:
     a stat-tree walk, not a hash, and a `git pull` or `npm install` already
     bumps mtimes on every file it touches, so it catches exactly the drift
     that matters (uncommitted edits included).
+
+    Walks with ``os.walk`` rather than ``Path.rglob`` so an excluded
+    directory (a nested ``node_modules`` under a workspace package, say) is
+    pruned before descending into it, not stat'd and then discarded.
     """
+    import os
+
     newest = 0.0
     for name in _FRONTEND_SOURCE_FILES:
         path = frontend_dir / name
@@ -605,12 +611,12 @@ def _frontend_newest_source_mtime(frontend_dir: Path) -> float:
         root = frontend_dir / dirname
         if not root.exists():
             continue
-        for path in root.rglob("*"):
-            if not path.is_file():
-                continue
-            if _FRONTEND_SOURCE_EXCLUDE_DIRS & set(path.relative_to(root).parts):
-                continue
-            newest = max(newest, path.stat().st_mtime)
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [
+                d for d in dirnames if d not in _FRONTEND_SOURCE_EXCLUDE_DIRS
+            ]
+            for filename in filenames:
+                newest = max(newest, os.path.getmtime(os.path.join(dirpath, filename)))
     return newest
 
 
