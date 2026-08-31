@@ -13,17 +13,24 @@ silent pass.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 import json
+import os
 from pathlib import Path
 
 import pytest
+import typer
 
+import penny.cli as cli_module
 from penny.cli import (
+    _expected_app_id,
     _frontend_dist_ok,
     _frontend_dist_stale,
     _frontend_newest_source_mtime,
     _resolve_frontend_dist,
 )
+
+_APP_ID = _expected_app_id()
 
 
 def _stamp(dist: Path, value: object) -> None:
@@ -40,9 +47,7 @@ def _dist(tmp_path: Path, stamp: object | None) -> Path:
 
 
 def test_stamped_dist_is_accepted(tmp_path: Path):
-    dist = _dist(
-        tmp_path, {"app": "penny-single-player", "builtAt": "2026-08-01T00:00:00Z"}
-    )
+    dist = _dist(tmp_path, {"app": _APP_ID, "builtAt": "2026-08-01T00:00:00Z"})
     assert _frontend_dist_ok(dist)
 
 
@@ -76,23 +81,15 @@ def test_dist_older_than_source_is_stale(tmp_path: Path):
     frontend = _frontend_tree(tmp_path)
     # A build stamped well before the source tree's mtimes (set by creating
     # the files just above, i.e. "now").
-    dist = _dist(
-        tmp_path / "out",
-        {"app": "penny-single-player", "builtAt": "2000-01-01T00:00:00Z"},
-    )
+    dist = _dist(tmp_path / "out", {"app": _APP_ID, "builtAt": "2000-01-01T00:00:00Z"})
     assert _frontend_dist_stale(dist, frontend)
 
 
 def test_dist_newer_than_source_is_fresh(tmp_path: Path):
     frontend = _frontend_tree(tmp_path)
     newest = _frontend_newest_source_mtime(frontend)
-    from datetime import UTC, datetime, timedelta
-
     built_at = datetime.fromtimestamp(newest, tz=UTC) + timedelta(seconds=1)
-    dist = _dist(
-        tmp_path / "out",
-        {"app": "penny-single-player", "builtAt": built_at.isoformat()},
-    )
+    dist = _dist(tmp_path / "out", {"app": _APP_ID, "builtAt": built_at.isoformat()})
     assert not _frontend_dist_stale(dist, frontend)
 
 
@@ -103,8 +100,6 @@ def test_source_mtime_ignores_node_modules_and_dist(tmp_path: Path):
     noisy.write_text("ignored", encoding="utf-8")
     # A file under an excluded dir name must not be the reported newest —
     # touch it far in the future and confirm it's not picked up.
-    import os
-
     future = 4102444800  # 2100-01-01, comfortably after any real source file
     os.utime(noisy, (future, future))
     assert _frontend_newest_source_mtime(frontend) < future
@@ -116,8 +111,6 @@ def test_resolve_rebuilds_a_stale_default_dist(
     """The repo-managed default dist is rebuilt in place when stale."""
     frontend = _frontend_tree(tmp_path)
 
-    import penny.cli as cli_module
-
     rebuilt = {"called": False}
 
     def fake_rebuild(target: Path) -> bool:
@@ -126,7 +119,7 @@ def test_resolve_rebuilds_a_stale_default_dist(
         dist = frontend / "dist"
         dist.mkdir(parents=True)
         (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
-        _stamp(dist, {"app": "penny-single-player", "builtAt": "2999-01-01T00:00:00Z"})
+        _stamp(dist, {"app": _APP_ID, "builtAt": "2999-01-01T00:00:00Z"})
         return True
 
     monkeypatch.setattr(cli_module, "_rebuild_frontend", fake_rebuild)
@@ -141,8 +134,6 @@ def test_resolve_falls_back_to_api_only_when_rebuild_fails(
 ):
     _frontend_tree(tmp_path)
 
-    import penny.cli as cli_module
-
     monkeypatch.setattr(cli_module, "_rebuild_frontend", lambda target: False)
 
     assert _resolve_frontend_dist(None, repo_root=tmp_path) is None
@@ -154,15 +145,11 @@ def test_resolve_leaves_a_fresh_default_dist_untouched(
     """An already-fresh dist is served without touching npm at all."""
     frontend = _frontend_tree(tmp_path)
     newest = _frontend_newest_source_mtime(frontend)
-    from datetime import UTC, datetime, timedelta
-
     built_at = datetime.fromtimestamp(newest, tz=UTC) + timedelta(seconds=1)
     dist = frontend / "dist"
     dist.mkdir(parents=True)
     (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
-    _stamp(dist, {"app": "penny-single-player", "builtAt": built_at.isoformat()})
-
-    import penny.cli as cli_module
+    _stamp(dist, {"app": _APP_ID, "builtAt": built_at.isoformat()})
 
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("a fresh dist must not trigger a rebuild")
@@ -176,16 +163,12 @@ def test_explicit_frontend_dir_is_never_auto_rebuilt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """An explicit --frontend-dir gets a hard error on a bad stamp, not a rebuild."""
-    import penny.cli as cli_module
-
     dist = _dist(tmp_path, stamp=None)
 
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("explicit --frontend-dir must never trigger a rebuild")
 
     monkeypatch.setattr(cli_module, "_rebuild_frontend", fail_if_called)
-
-    import typer
 
     with pytest.raises(typer.Exit):
         _resolve_frontend_dist(str(dist))
