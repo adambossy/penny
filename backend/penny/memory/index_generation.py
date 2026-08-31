@@ -6,9 +6,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from promptorium import load_prompt
-
 from penny.config import agent_model
+from penny.prompts import load_prompt
 
 DEFAULT_MEMORY_INDEX_PROMPT_KEY = "generate-memory-index"
 _REQUIRED_HEADINGS = (

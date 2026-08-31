@@ -14,15 +14,13 @@ from typing import TYPE_CHECKING, Literal
 import loguru
 from loguru import logger
 from openai import AsyncOpenAI
-from promptorium import PromptService, load_prompt
-from promptorium.storage import FileSystemPromptStorage
-from promptorium.util.repo_root import find_repo_root
 from pydantic import BaseModel, Field
 
 from penny import observability
 from penny.adapters.cache.file_cache import FileCache, stable_key
 from penny.adapters.clients.plaid_models import Transaction
 from penny.config import load_runtime_config_from_env
+from penny.prompts import load_prompt, prompt_service
 from penny.rules.loader import MerchantRulesLoader
 from penny.taxonomy.core import Taxonomy
 from penny.utils.yaml import dump_yaml_basic
@@ -277,9 +275,8 @@ class Categorizer:
         if self._rules_loader is not None:
             self._rules_content = self._rules_loader.load()
 
-        # Initialize promptorium service for version lookup
-        storage = FileSystemPromptStorage(find_repo_root())
-        self._prompt_service = PromptService(storage)
+        # Prompt version lookup, through the shared CWD-independent service.
+        self._prompt_service = prompt_service()
 
         self._openai_client: AsyncOpenAI | None = None
         self._gemini_client: GeminiClient | None = None
