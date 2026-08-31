@@ -216,12 +216,12 @@ AgentModel = (
 # quantization floor, zdr, data_collection, sort, allow_fallbacks — is
 # *derived* from the harness's policy instead of coincidentally matching
 # RoutingPolicy's defaults; a field the harness adds or retunes carries over
-# on its own. ``only`` is the exception: it is additive, so a provider the
-# harness later DROPS (for failing the predicate) is silently re-added here.
-# That is survivable rather than correct — ``zdr``/``data_collection`` are
-# hard filters OpenRouter applies server-side, so a provider that stopped
-# being ZDR is excluded at routing time regardless — but it is the reason
-# this list needs re-verifying, not just inheriting.
+# on its own. ``only`` is the exception: it is additive, so these four names
+# are frozen here and never re-vetted, however the predicate moves. That is
+# survivable rather than correct — ``zdr``/``data_collection`` are hard
+# filters OpenRouter applies server-side, so one that stopped being ZDR is
+# excluded at routing time regardless — but it is why this list needs
+# periodic re-verification rather than trusting inheritance.
 #
 # This widening is really the harness's homework (its own US_FP8_ZDR docstring
 # flags that the counts were never re-verified against GLM-5.3), so it belongs
