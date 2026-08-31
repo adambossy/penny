@@ -52,14 +52,16 @@ if (agentUiSrc) {
 
 // The app identity stamped into every build (frontend/app-id.json) — the
 // single source both this plugin and `penny serve`'s verifier
-// (backend/penny/cli.py) read, so the two languages can't drift apart on
-// what "built by this app" means.
+// (backend/penny/services/frontend_build.py) read, so the two languages
+// can't drift apart on what "built by this app" means.
 const APP_ID = JSON.parse(fs.readFileSync(path.join(__dirname, "app-id.json"), "utf-8")).app;
 
 // Stamp the build so `penny serve` can tell a dist built by this app from a
 // stale or foreign one — and, via `builtAt`, tell an up-to-date build from
-// one that predates a later source/dependency change. serve refuses a
-// foreign/unstamped dist and rebuilds a stale one; see penny/cli.py.
+// one that predates a later source/dependency change. For the repo-managed
+// default dist, serve rebuilds on either signal (foreign/unstamped or
+// stale); an explicit --frontend-dir instead hard-errors on a bad stamp,
+// never rebuilding it. See penny/services/frontend_build.py.
 function buildStamp() {
   let outDir = "";
   return {
