@@ -68,3 +68,34 @@ def test_authed_requests_pass_and_extra_router_mounts(isolated_db):
 def test_default_app_needs_no_auth(isolated_db):
     client = TestClient(create_app())
     assert client.get("/api/health").json() == {"ok": True}
+
+
+def test_static_dir_serves_the_spa_without_shadowing_the_api(isolated_db, tmp_path):
+    """A mounted UI answers `/` and every client-side route, and only those.
+
+    The regression: the default ASGI instance mounted no frontend, so `/` and
+    every SPA route 404'd while `/api` worked — "the app is down" (P15). The
+    other half matters just as much: the SPA fallback must not swallow unknown
+    /api paths into index.html, which would turn a typo'd endpoint into a 200
+    page for any client.
+    """
+    (tmp_path / "index.html").write_text("<!doctype html><title>Penny</title>")
+    client = TestClient(create_app(AppConfig(static_dir=tmp_path)))
+
+    with client:
+        assert client.get("/").status_code == 200
+        assert "Penny" in client.get("/c/some-conversation-id").text
+        assert client.get("/api/health").json() == {"ok": True}
+        unknown_api = client.get("/api/no-such-route")
+        assert unknown_api.status_code == 404
+        assert unknown_api.json() == {"detail": "Not Found"}
+
+
+def test_no_static_dir_leaves_the_api_alone(isolated_db):
+    """Nothing built yet is the API-only case, not an error (the Vite dev
+    server proxies to it) — so `/` 404s rather than the app refusing to boot."""
+    client = TestClient(create_app(AppConfig(static_dir=None)))
+
+    with client:
+        assert client.get("/api/health").json() == {"ok": True}
+        assert client.get("/").status_code == 404
