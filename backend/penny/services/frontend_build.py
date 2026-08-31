@@ -63,7 +63,7 @@ def _dist_ok(dist: Path) -> bool:
 # lockfiles is enough to catch an `npm install` drift without walking every
 # installed package.
 _SOURCE_DIRS = ("src", "packages")
-_SOURCE_FILES = ("package.json", "package-lock.json", "vite.config.ts")
+_SOURCE_FILES = ("package.json", "package-lock.json", "vite.config.ts", "index.html")
 _SOURCE_EXCLUDE_DIRS = {"node_modules", "dist", ".git"}
 
 
@@ -113,6 +113,12 @@ def _rebuild(frontend_dir: Path) -> bool:
 
     Output streams straight to the console (no capture) — a build failure's
     detail belongs in the terminal, not swallowed into an exception message.
+
+    Vite's build plugins (the stamp writer included) run their bundle-close
+    hooks even on a failed build, so a broken `npm run build` can still
+    leave a fresh-looking ``penny-build.json`` next to a partial dist. On
+    failure here, that stamp is removed so the next `penny serve` doesn't
+    mistake the wreckage for a good build.
     """
     npm = shutil.which("npm")
     if npm is None:
@@ -122,6 +128,8 @@ def _rebuild(frontend_dir: Path) -> bool:
         result = subprocess.run([npm, *args], cwd=frontend_dir)  # noqa: S603 - npm found via PATH, args are our own literals
         if result.returncode != 0:
             typer.echo(f"`npm {' '.join(args)}` failed — see output above.", err=True)
+            stamp_path = frontend_dir / "dist" / "penny-build.json"
+            stamp_path.unlink(missing_ok=True)
             return False
     return True
 

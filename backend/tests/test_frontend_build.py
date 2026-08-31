@@ -74,6 +74,17 @@ def test_stale_dist_missing_stamp_is_stale(tmp_path: Path):
     assert frontend_build._dist_stale(dist, frontend)
 
 
+def test_source_mtime_notices_index_html(tmp_path: Path):
+    """The Vite HTML entry feeds the build too, not just src/**."""
+    frontend = _frontend_tree(tmp_path)
+    baseline = frontend_build._newest_source_mtime(frontend)
+    html = frontend / "index.html"
+    html.write_text("<!doctype html>", encoding="utf-8")
+    future = baseline + 1000
+    os.utime(html, (future, future))
+    assert frontend_build._newest_source_mtime(frontend) == future
+
+
 def test_dist_older_than_source_is_stale(tmp_path: Path):
     frontend = _frontend_tree(tmp_path)
     # A build stamped well before the source tree's mtimes (set by creating
@@ -100,6 +111,34 @@ def test_source_mtime_ignores_node_modules_and_dist(tmp_path: Path):
     future = 4102444800  # 2100-01-01, comfortably after any real source file
     os.utime(noisy, (future, future))
     assert frontend_build._newest_source_mtime(frontend) < future
+
+
+def test_failed_build_does_not_leave_a_stamp_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A failed `npm run build` must not leave a fresh-looking stamp.
+
+    Vite's bundle-close hooks (the stamp writer included) still run on a
+    failed build, so a broken build can leave `penny-build.json` next to a
+    partial dist — `_rebuild` must clean that up on failure.
+    """
+    frontend = _frontend_tree(tmp_path)
+    dist = frontend / "dist"
+    dist.mkdir(parents=True)
+
+    def fake_run(args, cwd, **_kwargs):
+        # Simulate `npm run build` failing after Vite already wrote the
+        # stamp for its (broken) partial output.
+        if args[1:] == ["run", "build"]:
+            _stamp(dist, {"app": _APP_ID, "builtAt": "2999-01-01T00:00:00Z"})
+            return type("Result", (), {"returncode": 1})()
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(frontend_build.shutil, "which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(frontend_build.subprocess, "run", fake_run)
+
+    assert frontend_build._rebuild(frontend) is False
+    assert not (dist / "penny-build.json").exists()
 
 
 def test_resolve_rebuilds_a_stale_default_dist(
