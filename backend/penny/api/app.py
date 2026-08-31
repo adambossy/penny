@@ -81,6 +81,18 @@ class AppConfig:
     static_dir: Path | None = None  # built frontend; served at / when set
 
 
+def default_static_dir() -> Path | None:
+    """The repo's built web UI (``frontend/dist``), or ``None`` when unbuilt.
+
+    Both single-player front doors resolve the UI through this one function —
+    ``penny serve`` and the default ``penny.api.main`` instance — so a checkout
+    can't serve the app one way and 404 the other. ``None`` (nothing built yet)
+    is the API-only case, not an error: the Vite dev server proxies to it.
+    """
+    candidate = Path(__file__).resolve().parents[3] / "frontend" / "dist"
+    return candidate if candidate.is_dir() else None
+
+
 def create_app(config: AppConfig | None = None) -> FastAPI:
     """Build the chat API app from ``config`` (single-player defaults)."""
     from penny.api import routes
