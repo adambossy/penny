@@ -21,13 +21,10 @@ from pathlib import Path
 import pytest
 import typer
 
-import penny.cli as cli_module
-from penny.cli import (
+import penny.services.frontend_build as frontend_build
+from penny.services.frontend_build import (
     _expected_app_id,
-    _frontend_dist_ok,
-    _frontend_dist_stale,
-    _frontend_newest_source_mtime,
-    _resolve_frontend_dist,
+    resolve_frontend_dist,
 )
 
 _APP_ID = _expected_app_id()
@@ -48,19 +45,19 @@ def _dist(tmp_path: Path, stamp: object | None) -> Path:
 
 def test_stamped_dist_is_accepted(tmp_path: Path):
     dist = _dist(tmp_path, {"app": _APP_ID, "builtAt": "2026-08-01T00:00:00Z"})
-    assert _frontend_dist_ok(dist)
+    assert frontend_build._dist_ok(dist)
 
 
 def test_unstamped_dist_is_rejected(tmp_path: Path):
     # The incident shape: a real dist with index.html but no stamp.
-    assert not _frontend_dist_ok(_dist(tmp_path, stamp=None))
+    assert not frontend_build._dist_ok(_dist(tmp_path, stamp=None))
 
 
 def test_foreign_or_corrupt_stamp_is_rejected(tmp_path: Path):
-    assert not _frontend_dist_ok(_dist(tmp_path, {"app": "someone-else"}))
+    assert not frontend_build._dist_ok(_dist(tmp_path, {"app": "someone-else"}))
     corrupt = _dist(tmp_path / "c", stamp=None)
     (corrupt / "penny-build.json").write_text("not json", encoding="utf-8")
-    assert not _frontend_dist_ok(corrupt)
+    assert not frontend_build._dist_ok(corrupt)
 
 
 def _frontend_tree(tmp_path: Path) -> Path:
@@ -74,7 +71,7 @@ def _frontend_tree(tmp_path: Path) -> Path:
 def test_stale_dist_missing_stamp_is_stale(tmp_path: Path):
     frontend = _frontend_tree(tmp_path)
     dist = _dist(tmp_path / "out", stamp=None)
-    assert _frontend_dist_stale(dist, frontend)
+    assert frontend_build._dist_stale(dist, frontend)
 
 
 def test_dist_older_than_source_is_stale(tmp_path: Path):
@@ -82,15 +79,15 @@ def test_dist_older_than_source_is_stale(tmp_path: Path):
     # A build stamped well before the source tree's mtimes (set by creating
     # the files just above, i.e. "now").
     dist = _dist(tmp_path / "out", {"app": _APP_ID, "builtAt": "2000-01-01T00:00:00Z"})
-    assert _frontend_dist_stale(dist, frontend)
+    assert frontend_build._dist_stale(dist, frontend)
 
 
 def test_dist_newer_than_source_is_fresh(tmp_path: Path):
     frontend = _frontend_tree(tmp_path)
-    newest = _frontend_newest_source_mtime(frontend)
+    newest = frontend_build._newest_source_mtime(frontend)
     built_at = datetime.fromtimestamp(newest, tz=UTC) + timedelta(seconds=1)
     dist = _dist(tmp_path / "out", {"app": _APP_ID, "builtAt": built_at.isoformat()})
-    assert not _frontend_dist_stale(dist, frontend)
+    assert not frontend_build._dist_stale(dist, frontend)
 
 
 def test_source_mtime_ignores_node_modules_and_dist(tmp_path: Path):
@@ -102,7 +99,7 @@ def test_source_mtime_ignores_node_modules_and_dist(tmp_path: Path):
     # touch it far in the future and confirm it's not picked up.
     future = 4102444800  # 2100-01-01, comfortably after any real source file
     os.utime(noisy, (future, future))
-    assert _frontend_newest_source_mtime(frontend) < future
+    assert frontend_build._newest_source_mtime(frontend) < future
 
 
 def test_resolve_rebuilds_a_stale_default_dist(
@@ -122,9 +119,9 @@ def test_resolve_rebuilds_a_stale_default_dist(
         _stamp(dist, {"app": _APP_ID, "builtAt": "2999-01-01T00:00:00Z"})
         return True
 
-    monkeypatch.setattr(cli_module, "_rebuild_frontend", fake_rebuild)
+    monkeypatch.setattr(frontend_build, "_rebuild", fake_rebuild)
 
-    result = _resolve_frontend_dist(None, repo_root=tmp_path)
+    result = resolve_frontend_dist(None, repo_root=tmp_path)
     assert rebuilt["called"]
     assert result == frontend / "dist"
 
@@ -134,9 +131,9 @@ def test_resolve_falls_back_to_api_only_when_rebuild_fails(
 ):
     _frontend_tree(tmp_path)
 
-    monkeypatch.setattr(cli_module, "_rebuild_frontend", lambda target: False)
+    monkeypatch.setattr(frontend_build, "_rebuild", lambda target: False)
 
-    assert _resolve_frontend_dist(None, repo_root=tmp_path) is None
+    assert resolve_frontend_dist(None, repo_root=tmp_path) is None
 
 
 def test_resolve_leaves_a_fresh_default_dist_untouched(
@@ -144,7 +141,7 @@ def test_resolve_leaves_a_fresh_default_dist_untouched(
 ):
     """An already-fresh dist is served without touching npm at all."""
     frontend = _frontend_tree(tmp_path)
-    newest = _frontend_newest_source_mtime(frontend)
+    newest = frontend_build._newest_source_mtime(frontend)
     built_at = datetime.fromtimestamp(newest, tz=UTC) + timedelta(seconds=1)
     dist = frontend / "dist"
     dist.mkdir(parents=True)
@@ -154,9 +151,9 @@ def test_resolve_leaves_a_fresh_default_dist_untouched(
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("a fresh dist must not trigger a rebuild")
 
-    monkeypatch.setattr(cli_module, "_rebuild_frontend", fail_if_called)
+    monkeypatch.setattr(frontend_build, "_rebuild", fail_if_called)
 
-    assert _resolve_frontend_dist(None, repo_root=tmp_path) == dist
+    assert resolve_frontend_dist(None, repo_root=tmp_path) == dist
 
 
 def test_explicit_frontend_dir_is_never_auto_rebuilt(
@@ -168,7 +165,7 @@ def test_explicit_frontend_dir_is_never_auto_rebuilt(
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("explicit --frontend-dir must never trigger a rebuild")
 
-    monkeypatch.setattr(cli_module, "_rebuild_frontend", fail_if_called)
+    monkeypatch.setattr(frontend_build, "_rebuild", fail_if_called)
 
     with pytest.raises(typer.Exit):
-        _resolve_frontend_dist(str(dist))
+        resolve_frontend_dist(str(dist))
