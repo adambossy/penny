@@ -12,6 +12,8 @@ for.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from agent_harness.core.credentials import ApiKeyCredential
 from agent_harness.core.errors import ConfigError
 from agent_harness.providers.anthropic import OPUS_5, AnthropicMessagesModel
@@ -105,35 +107,27 @@ def test_kimi_k3_pins_moonshot_direct_routing() -> None:
     assert model.routing.only == ("moonshotai",)
 
 
-def test_glm_widens_the_vetted_us_fp8_zdr_set() -> None:
-    """Only 3 of the harness default's 6 providers serve glm-5.3-flash live,
-    so one upstream rate limit could abort a whole report run; Penny widens
-    the same vetted policy with more US/FP8/ZDR providers so OpenRouter has
-    somewhere to fall back to."""
-    model = build_model(name=GLM_5_3)
-    assert set(model.routing.only) > set(US_FP8_ZDR.only)
-    assert "modal" in model.routing.only
-    # The hard filters and soft knobs carry over from the harness default:
-    # widening `only` must never loosen quantization/ZDR vetting, and
-    # price-sort + fallbacks is what makes the wider set free resilience.
-    assert model.routing.quantizations == US_FP8_ZDR.quantizations
-    assert model.routing.zdr is True
-    assert model.routing.sort == "price"
-    assert model.routing.allow_fallbacks is True
+def test_unpinned_openrouter_models_get_the_widened_policy() -> None:
+    """The widened set is the DEFAULT, so a newly-offered OpenRouter model
+    cannot silently regress to the narrow policy that caused the outage.
 
-
-def test_glm_flash_routes_the_same_as_glm() -> None:
-    """One policy for the GLM family — flash must not drift from its sibling."""
-    assert build_model(name=GLM_5_3_FLASH).routing == build_model(name=GLM_5_3).routing
+    Exact equality, not a superset check: every field but ``only`` must be
+    derived from the harness policy rather than merely matching its defaults,
+    so a field the harness adds or retunes carries over on its own.
+    """
+    # Neither GLM id is in _OPENROUTER_ROUTING, so both go through the default
+    # branch — the same one a newly-offered OpenRouter model would take.
+    for name in (GLM_5_3, GLM_5_3_FLASH):
+        assert build_model(name=name).routing == replace(
+            US_FP8_ZDR,
+            only=US_FP8_ZDR.only + ("modal", "deepinfra", "parasail", "reka"),
+        )
 
 
 def test_openrouter_models_widen_the_sdk_retry_budget() -> None:
-    """OpenRouter surfaces upstream rate limits as plain 429s; the anthropic
-    SDK's default budget of 2 backoff retries is shorter than the observed
-    rate-limit windows, so a scheduled report died on its first call. The
-    widened budget is defense-in-depth behind the widened provider set."""
-    model = build_model(name=GLM_5_3_FLASH)
-    assert model.provider.client.max_retries > 2
+    """The SDK's default of 2 is shorter than the observed rate-limit windows,
+    leaving the interactive path (no outer retry) surfacing a 429 as an error."""
+    assert build_model(name=GLM_5_3_FLASH).provider.client.max_retries > 2
 
 
 def test_env_selects_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:

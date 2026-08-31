@@ -14,6 +14,7 @@ conversation carries its own session. Tools come from five sources:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 import os
 from pathlib import Path
@@ -29,8 +30,6 @@ from agent_harness.providers.anthropic import AnthropicMessagesModel, AnthropicP
 from agent_harness.providers.google import GeminiModel, GoogleProvider
 from agent_harness.providers.openai import OpenAIProvider, OpenAIResponsesModel
 from agent_harness.providers.openrouter import (
-    GLM_5_3,
-    GLM_5_3_FLASH,
     KIMI_K3,
     MOONSHOT_DIRECT,
     US_FP8_ZDR,
@@ -203,36 +202,39 @@ AgentModel = (
 )
 """Every model shape ``build_model`` can return."""
 
-# The harness's US_FP8_ZDR allowlist leaves GLM with too few live endpoints:
-# of its six providers only novita, baseten, and io-net serve
-# ``z-ai/glm-5.3-flash`` today (decart and atlas-cloud serve neither GLM
-# model; venice's endpoint no longer declares a quantization), so an upstream
-# rate limit had almost nowhere to fall back to and scheduled report runs
-# were dying ~30% of the time on the very first call. This widens the same
-# vetted policy with the US-headquartered FP8 ZDR providers verified live on
-# 2026-08-30 (``/api/v1/models/z-ai/glm-5.3-flash/endpoints`` intersected
-# with ``/api/v1/endpoints/zdr``): modal, deepinfra, parasail, reka. The hard
-# filters (``quantizations``/``zdr``/``data_collection``) carry over
-# unchanged, so a listed provider's non-FP8 endpoint for some other model —
-# e.g. deepinfra serves plain glm-5.3 only at fp4 — can never sneak in; and
-# because ``sort="price"`` orders the set, widening ``only`` adds fallback
-# resilience without adding cost — pricier endpoints serve only when cheaper
-# ones fail.
-_GLM_US_FP8_ZDR = RoutingPolicy(
-    only=US_FP8_ZDR.only + ("modal", "deepinfra", "parasail", "reka"),
-    quantizations=US_FP8_ZDR.quantizations,
+# The harness's US_FP8_ZDR allowlist has gone stale: of its six providers only
+# novita, baseten and io-net still serve ``z-ai/glm-5.3-flash`` (decart and
+# atlas-cloud serve neither GLM model; venice's endpoint no longer declares a
+# quantization), so an upstream rate limit had almost nowhere to fall back to
+# and scheduled report runs died ~30% of the time on their first call. These
+# four satisfy the same US-headquartered/FP8-or-better/ZDR predicate, verified
+# live on 2026-08-30 by intersecting
+# ``/api/v1/models/z-ai/glm-5.3-flash/endpoints`` with
+# ``/api/v1/endpoints/zdr``.
+#
+# ``replace`` rather than a fresh RoutingPolicy so every other field — the
+# quantization floor, zdr, data_collection, sort, allow_fallbacks — is
+# *derived* from the harness's policy instead of coincidentally matching
+# RoutingPolicy's defaults; a field the harness adds or retunes carries over
+# on its own.
+#
+# This widening is really the harness's homework (its own US_FP8_ZDR docstring
+# flags that the counts were never re-verified against GLM-5.3), so it belongs
+# upstream in agent-harness; it lives here only until that lands.
+_WIDE_US_FP8_ZDR = replace(
+    US_FP8_ZDR, only=US_FP8_ZDR.only + ("modal", "deepinfra", "parasail", "reka")
 )
 
-# Per-model routing overrides for OpenRouter-served models. Kimi K3 has
-# exactly one upstream endpoint (moonshotai/int4), so the harness's default
-# US_FP8_ZDR policy matches zero endpoints and every request 404s — pinning
-# MOONSHOT_DIRECT here means no caller has to know that. Absent means the
-# harness default. NOT a list of known models: which models exist is the
-# harness catalogue's business, and which are offered is ``model_selection``'s.
-_OPENROUTER_ROUTING: dict[str, RoutingPolicy | None] = {
+# Routing EXCEPTIONS for OpenRouter-served models; everything else gets
+# _WIDE_US_FP8_ZDR. Kimi K3 has exactly one upstream endpoint
+# (moonshotai/int4), which no US/FP8/ZDR policy can match — every request 404s
+# — so it pins MOONSHOT_DIRECT and no caller has to know that. Deliberately
+# only the exceptions: a new OpenRouter model gets the widened set by default,
+# because defaulting to the narrow one is exactly what caused the outage above.
+# NOT a list of known models: which models exist is the harness catalogue's
+# business, and which are offered is ``model_selection``'s.
+_OPENROUTER_ROUTING: dict[str, RoutingPolicy] = {
     KIMI_K3: MOONSHOT_DIRECT,
-    GLM_5_3: _GLM_US_FP8_ZDR,
-    GLM_5_3_FLASH: _GLM_US_FP8_ZDR,
 }
 
 
@@ -240,15 +242,21 @@ _OPENROUTER_MAX_RETRIES = 5
 """Pre-stream retry budget for OpenRouter calls (anthropic SDK ``max_retries``).
 
 OpenRouter surfaces an upstream rate limit as a plain HTTP 429 (measured
-2026-08-30: no ``Retry-After`` header), which the anthropic SDK retries with
-exponential backoff + jitter — but its default budget of 2 (~3.5 s of
-backoff) is shorter than the multi-second windows glm-5.3-flash was observed
-rate-limited for, so a report run still died on its first call. Five retries
-(~15 s worst case) rides out those windows; the extra latency is paid only
-while every routable endpoint is actually failing. Retries fire only on
-retryable statuses (408/429/5xx/connection errors), never on auth or bad
-requests, and never mid-stream — this is defense-in-depth behind the widened
-``_GLM_US_FP8_ZDR`` fallback set above, not a substitute for it.
+2026-08-30: no ``Retry-After`` header). The SDK's default budget of 2 (~3.5 s
+of backoff) is shorter than the windows glm-5.3-flash was observed limited
+for; 5 (~15 s) rides them out.
+
+The load-bearing case is the INTERACTIVE path — a chat turn or ``penny run``,
+where a 429 becomes a red banner and there is no outer retry. Scheduled
+reports already have a better one: a failed job never records its period, so
+``daemon.py``'s next tick re-runs it a minute later. The cost lands on that
+same interactive path, per model call rather than per run: a turn that makes
+N calls can stall N × ~15 s before its first token while every routable
+endpoint is failing. That is the trade this constant makes, and it is
+defense-in-depth behind ``_WIDE_US_FP8_ZDR`` above — the wider fallback set,
+not this, is what should usually save the call. Only OpenRouter carries the
+raised budget: it fans out to third-party upstreams that rate-limit
+independently, where the first-party providers below do not.
 """
 
 
@@ -298,7 +306,7 @@ def _build_openrouter_model(
             max_retries=_OPENROUTER_MAX_RETRIES,
         ),
         name=name,
-        routing=_OPENROUTER_ROUTING.get(name),
+        routing=_OPENROUTER_ROUTING.get(name, _WIDE_US_FP8_ZDR),
     )
 
 
