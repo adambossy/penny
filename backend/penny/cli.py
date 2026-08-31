@@ -619,10 +619,8 @@ def _frontend_dist_stale(dist: Path, frontend_dir: Path) -> bool:
     stamp = _frontend_build_stamp(dist)
     if stamp is None:
         return True
-    from datetime import datetime as _datetime
-
     try:
-        built_at = _datetime.fromisoformat(str(stamp["builtAt"]).replace("Z", "+00:00"))
+        built_at = datetime.fromisoformat(str(stamp["builtAt"]).replace("Z", "+00:00"))
     except (KeyError, ValueError):
         return True
     return _frontend_newest_source_mtime(frontend_dir) > built_at.timestamp()
