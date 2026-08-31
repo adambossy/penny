@@ -683,8 +683,8 @@ def _resolve_frontend_dist(
     frontend_dir = repo_root / "frontend"
     candidate = frontend_dir / "dist"
     if not frontend_dir.exists():
-        if candidate.exists() and _frontend_dist_ok(candidate):
-            return candidate
+        # No source tree to build from at all — the repo-managed default
+        # can't be a stamped dist without it (`candidate` lives under it).
         typer.echo(
             "No built frontend found — serving the API only. "
             "Build it with `npm run build` in frontend/."
