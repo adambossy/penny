@@ -225,7 +225,7 @@ AgentModel = (
 #
 # This widening is really the harness's homework (its own US_FP8_ZDR docstring
 # flags that the counts were never re-verified against GLM-5.3), so it belongs
-# upstream in agent-harness; it lives here only until that lands.
+# upstream in agent-harness; it lives here only until that lands (fly-162).
 _WIDE_US_FP8_ZDR = replace(
     US_FP8_ZDR, only=US_FP8_ZDR.only + ("modal", "deepinfra", "parasail", "reka")
 )
