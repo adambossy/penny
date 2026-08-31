@@ -105,16 +105,35 @@ def test_kimi_k3_pins_moonshot_direct_routing() -> None:
     assert model.routing.only == ("moonshotai",)
 
 
-def test_glm_keeps_the_harness_default_routing() -> None:
-    """Only K3 needs the opt-in; GLM stays on the vetted US/FP8/ZDR set."""
+def test_glm_widens_the_vetted_us_fp8_zdr_set() -> None:
+    """Only 3 of the harness default's 6 providers serve glm-5.3-flash live,
+    so one upstream rate limit could abort a whole report run; Penny widens
+    the same vetted policy with more US/FP8/ZDR providers so OpenRouter has
+    somewhere to fall back to."""
     model = build_model(name=GLM_5_3)
-    assert model.routing == US_FP8_ZDR
+    assert set(model.routing.only) > set(US_FP8_ZDR.only)
+    assert "modal" in model.routing.only
+    # The hard filters and soft knobs carry over from the harness default:
+    # widening `only` must never loosen quantization/ZDR vetting, and
+    # price-sort + fallbacks is what makes the wider set free resilience.
+    assert model.routing.quantizations == US_FP8_ZDR.quantizations
+    assert model.routing.zdr is True
+    assert model.routing.sort == "price"
+    assert model.routing.allow_fallbacks is True
 
 
-def test_glm_flash_keeps_the_harness_default_routing() -> None:
-    """GLM-5.3-Flash is routed the same as GLM-5.3."""
+def test_glm_flash_routes_the_same_as_glm() -> None:
+    """One policy for the GLM family — flash must not drift from its sibling."""
+    assert build_model(name=GLM_5_3_FLASH).routing == build_model(name=GLM_5_3).routing
+
+
+def test_openrouter_models_widen_the_sdk_retry_budget() -> None:
+    """OpenRouter surfaces upstream rate limits as plain 429s; the anthropic
+    SDK's default budget of 2 backoff retries is shorter than the observed
+    rate-limit windows, so a scheduled report died on its first call. The
+    widened budget is defense-in-depth behind the widened provider set."""
     model = build_model(name=GLM_5_3_FLASH)
-    assert model.routing == US_FP8_ZDR
+    assert model.provider.client.max_retries > 2
 
 
 def test_env_selects_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
