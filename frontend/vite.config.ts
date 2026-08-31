@@ -50,8 +50,37 @@ if (agentUiSrc) {
   console.warn(`[vite] agent-ui aliased to LOCAL source: ${agentUiSrc}`);
 }
 
+// The app identity stamped into every build (frontend/app-id.json) — the
+// single source both this plugin and `penny serve`'s verifier
+// (backend/penny/services/frontend_build.py) read, so the two languages
+// can't drift apart on what "built by this app" means.
+const APP_ID = JSON.parse(fs.readFileSync(path.join(__dirname, "app-id.json"), "utf-8")).app;
+
+// Stamp the build so `penny serve` can tell a dist built by this app from a
+// stale or foreign one — and, via `builtAt`, tell an up-to-date build from
+// one that predates a later source/dependency change. For the repo-managed
+// default dist, serve rebuilds on either signal (foreign/unstamped or
+// stale); an explicit --frontend-dir instead hard-errors on a bad stamp,
+// never rebuilding it. See penny/services/frontend_build.py.
+function buildStamp() {
+  let outDir = "";
+  return {
+    name: "penny-build-stamp",
+    apply: "build" as const,
+    configResolved(config: { root: string; build: { outDir: string } }) {
+      outDir = path.resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      fs.writeFileSync(
+        path.join(outDir, "penny-build.json"),
+        JSON.stringify({ app: APP_ID, builtAt: new Date().toISOString() }, null, 2) + "\n",
+      );
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), buildStamp()],
   resolve: {
     // Force a single React instance. Historically, source-aliasing
     // agent-ui made its sibling `node_modules/react` resolve as a

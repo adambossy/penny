@@ -579,33 +579,19 @@ def serve(
 
     On a Postgres database the alembic chain is applied first (idempotent);
     SQLite builds its schema at startup. The web UI is served from the built
-    frontend when available — without it, the API alone runs (use the Vite
-    dev server against it for development).
+    frontend — the repo's own ``frontend/dist`` is kept fresh automatically
+    (rebuilt when missing or stale); without one at all, the API alone runs
+    (or use the Vite dev server against it for development).
     """
-    from pathlib import Path
-
     import uvicorn
 
     from penny.api.app import AppConfig, create_app
     from penny.bootstrap import prepare_database
+    from penny.services.frontend_build import resolve_frontend_dist
 
     prepare_database()
 
-    static: Path | None = None
-    if frontend_dir is not None:
-        static = Path(frontend_dir).expanduser()
-    else:
-        candidate = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
-        if candidate.exists():
-            static = candidate
-    if static is not None and not static.exists():
-        typer.echo(f"Frontend dir not found: {static}", err=True)
-        raise typer.Exit(1)
-    if static is None:
-        typer.echo(
-            "No built frontend found — serving the API only. "
-            "Build it with `npm run build` in frontend/."
-        )
+    static = resolve_frontend_dist(frontend_dir)
 
     if all_in_one:
         import threading

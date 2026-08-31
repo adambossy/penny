@@ -1,0 +1,210 @@
+"""`penny serve` only serves a dist carrying this app's build stamp, and
+rebuilds one that's older than its own sources.
+
+Born from a real incident: a gitignored pre-split frontend/dist (Clerk
+landing page and all) survived the single-player merge and `penny serve`
+happily served it against the no-auth backend. The stamp (``penny-build.json``,
+written by vite.config.ts) is how serve tells a dist built by this app from a
+stale or foreign one; a second real incident (an `npm install` drift left
+uninstalled, an old dist quietly served for weeks) is why an in-family stamp
+that predates its own sources triggers an automatic rebuild rather than a
+silent pass.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+import json
+import os
+from pathlib import Path
+
+import pytest
+import typer
+
+import penny.services.frontend_build as frontend_build
+from penny.services.frontend_build import (
+    _expected_app_id,
+    resolve_frontend_dist,
+)
+
+_APP_ID = _expected_app_id()
+
+
+def _stamp(dist: Path, value: object) -> None:
+    (dist / "penny-build.json").write_text(json.dumps(value), encoding="utf-8")
+
+
+def _dist(tmp_path: Path, stamp: object | None) -> Path:
+    dist = tmp_path / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    if stamp is not None:
+        _stamp(dist, stamp)
+    return dist
+
+
+def test_stamped_dist_is_accepted(tmp_path: Path):
+    dist = _dist(tmp_path, {"app": _APP_ID, "builtAt": "2026-08-01T00:00:00Z"})
+    assert frontend_build._dist_ok(dist)
+
+
+def test_unstamped_dist_is_rejected(tmp_path: Path):
+    # The incident shape: a real dist with index.html but no stamp.
+    assert not frontend_build._dist_ok(_dist(tmp_path, stamp=None))
+
+
+def test_foreign_or_corrupt_stamp_is_rejected(tmp_path: Path):
+    assert not frontend_build._dist_ok(_dist(tmp_path, {"app": "someone-else"}))
+    corrupt = _dist(tmp_path / "c", stamp=None)
+    (corrupt / "penny-build.json").write_text("not json", encoding="utf-8")
+    assert not frontend_build._dist_ok(corrupt)
+
+
+def _frontend_tree(tmp_path: Path) -> Path:
+    frontend = tmp_path / "frontend"
+    (frontend / "src").mkdir(parents=True)
+    (frontend / "package.json").write_text("{}", encoding="utf-8")
+    (frontend / "src" / "main.tsx").write_text("// app", encoding="utf-8")
+    return frontend
+
+
+def test_stale_dist_missing_stamp_is_stale(tmp_path: Path):
+    frontend = _frontend_tree(tmp_path)
+    dist = _dist(tmp_path / "out", stamp=None)
+    assert frontend_build._dist_stale(dist, frontend)
+
+
+def test_source_mtime_notices_index_html(tmp_path: Path):
+    """The Vite HTML entry feeds the build too, not just src/**."""
+    frontend = _frontend_tree(tmp_path)
+    baseline = frontend_build._newest_source_mtime(frontend)
+    html = frontend / "index.html"
+    html.write_text("<!doctype html>", encoding="utf-8")
+    future = baseline + 1000
+    os.utime(html, (future, future))
+    assert frontend_build._newest_source_mtime(frontend) == future
+
+
+def test_dist_older_than_source_is_stale(tmp_path: Path):
+    frontend = _frontend_tree(tmp_path)
+    # A build stamped well before the source tree's mtimes (set by creating
+    # the files just above, i.e. "now").
+    dist = _dist(tmp_path / "out", {"app": _APP_ID, "builtAt": "2000-01-01T00:00:00Z"})
+    assert frontend_build._dist_stale(dist, frontend)
+
+
+def test_dist_newer_than_source_is_fresh(tmp_path: Path):
+    frontend = _frontend_tree(tmp_path)
+    newest = frontend_build._newest_source_mtime(frontend)
+    built_at = datetime.fromtimestamp(newest, tz=UTC) + timedelta(seconds=1)
+    dist = _dist(tmp_path / "out", {"app": _APP_ID, "builtAt": built_at.isoformat()})
+    assert not frontend_build._dist_stale(dist, frontend)
+
+
+def test_source_mtime_ignores_node_modules_and_dist(tmp_path: Path):
+    frontend = _frontend_tree(tmp_path)
+    noisy = frontend / "src" / "node_modules" / "whatever.js"
+    noisy.parent.mkdir(parents=True)
+    noisy.write_text("ignored", encoding="utf-8")
+    # A file under an excluded dir name must not be the reported newest —
+    # touch it far in the future and confirm it's not picked up.
+    future = 4102444800  # 2100-01-01, comfortably after any real source file
+    os.utime(noisy, (future, future))
+    assert frontend_build._newest_source_mtime(frontend) < future
+
+
+def test_failed_build_does_not_leave_a_stamp_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A failed `npm run build` must not leave a fresh-looking stamp.
+
+    Vite's bundle-close hooks (the stamp writer included) still run on a
+    failed build, so a broken build can leave `penny-build.json` next to a
+    partial dist — `_rebuild` must clean that up on failure.
+    """
+    frontend = _frontend_tree(tmp_path)
+    dist = frontend / "dist"
+    dist.mkdir(parents=True)
+
+    def fake_run(args, cwd, **_kwargs):
+        # Simulate `npm run build` failing after Vite already wrote the
+        # stamp for its (broken) partial output.
+        if args[1:] == ["run", "build"]:
+            _stamp(dist, {"app": _APP_ID, "builtAt": "2999-01-01T00:00:00Z"})
+            return type("Result", (), {"returncode": 1})()
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(frontend_build.shutil, "which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(frontend_build.subprocess, "run", fake_run)
+
+    assert frontend_build._rebuild(frontend) is False
+    assert not (dist / "penny-build.json").exists()
+
+
+def test_resolve_rebuilds_a_stale_default_dist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The repo-managed default dist is rebuilt in place when stale."""
+    frontend = _frontend_tree(tmp_path)
+
+    rebuilt = {"called": False}
+
+    def fake_rebuild(target: Path) -> bool:
+        rebuilt["called"] = True
+        assert target == frontend
+        dist = frontend / "dist"
+        dist.mkdir(parents=True)
+        (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+        _stamp(dist, {"app": _APP_ID, "builtAt": "2999-01-01T00:00:00Z"})
+        return True
+
+    monkeypatch.setattr(frontend_build, "_rebuild", fake_rebuild)
+
+    result = resolve_frontend_dist(None, repo_root=tmp_path)
+    assert rebuilt["called"]
+    assert result == frontend / "dist"
+
+
+def test_resolve_falls_back_to_api_only_when_rebuild_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _frontend_tree(tmp_path)
+
+    monkeypatch.setattr(frontend_build, "_rebuild", lambda target: False)
+
+    assert resolve_frontend_dist(None, repo_root=tmp_path) is None
+
+
+def test_resolve_leaves_a_fresh_default_dist_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An already-fresh dist is served without touching npm at all."""
+    frontend = _frontend_tree(tmp_path)
+    newest = frontend_build._newest_source_mtime(frontend)
+    built_at = datetime.fromtimestamp(newest, tz=UTC) + timedelta(seconds=1)
+    dist = frontend / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    _stamp(dist, {"app": _APP_ID, "builtAt": built_at.isoformat()})
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("a fresh dist must not trigger a rebuild")
+
+    monkeypatch.setattr(frontend_build, "_rebuild", fail_if_called)
+
+    assert resolve_frontend_dist(None, repo_root=tmp_path) == dist
+
+
+def test_explicit_frontend_dir_is_never_auto_rebuilt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An explicit --frontend-dir gets a hard error on a bad stamp, not a rebuild."""
+    dist = _dist(tmp_path, stamp=None)
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("explicit --frontend-dir must never trigger a rebuild")
+
+    monkeypatch.setattr(frontend_build, "_rebuild", fail_if_called)
+
+    with pytest.raises(typer.Exit):
+        resolve_frontend_dist(str(dist))
