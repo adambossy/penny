@@ -78,7 +78,12 @@ class AppConfig:
     turn_wiring: TurnWiring = field(default_factory=LocalTurnWiring)
     extra_routers: Sequence[APIRouter] = ()
     cors_origins: Sequence[str] = ("http://localhost:5173",)
-    static_dir: Path | None = None  # built frontend; served at / when set
+    # Built frontend; served at / when set. Defaults to None rather than
+    # `default_static_dir()` deliberately: that helper is repo-relative, and a
+    # host composing this app (penny-web) ships no `frontend/dist` beside the
+    # package — it must opt in explicitly or get API-only. Single-player front
+    # doors are the ones that pass `default_static_dir()`.
+    static_dir: Path | None = None
 
 
 def default_static_dir() -> Path | None:
