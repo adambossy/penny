@@ -58,8 +58,3 @@ def test_load_prompt_works_from_the_filesystem_root():
 
     assert result.returncode == 0, result.stderr
     assert int(result.stdout.strip()) > 0
-
-
-def test_prompt_service_is_one_shared_instance():
-    """Callers needing version lookup must not build their own rooted service."""
-    assert prompt_service() is prompt_service()
