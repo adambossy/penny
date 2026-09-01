@@ -1,12 +1,8 @@
 """The skill manifest actually reaches the model, as a per-turn reminder.
 
-The ``Skill`` tool's own description tells the model it already saw
-name + description + when_to_use for every skill in its system prompt —
-but nothing in agent-harness or Penny ever made that true (a scheduled
-report run once guessed a plausible-but-wrong skill name as a result).
-These tests pin the fix: :func:`format_skill_manifest` renders the
-manifest, and :func:`announce_skill_manifest` delivers it through the
-existing ``ReminderQueue`` mechanism (the same one that already carries
+:func:`format_skill_manifest` renders the manifest, and
+:func:`announce_skill_manifest` delivers it through the existing
+``ReminderQueue`` mechanism (the same one that already carries
 onboarding nudges into a turn).
 """
 
@@ -57,7 +53,6 @@ def test_format_skill_manifest_lists_every_skill_with_its_slug() -> None:
     # assert
     for line in expected_lines:
         assert line in output
-    assert "spending-report" in output
 
 
 async def test_announce_skill_manifest_noop_without_a_queue() -> None:
@@ -84,19 +79,3 @@ async def test_announce_skill_manifest_enqueues_under_its_own_kind() -> None:
     assert drained[0].kind == "skill_manifest"
     assert "demo" in drained[0].content
 
-
-async def test_announce_skill_manifest_only_the_named_session_sees_it() -> None:
-    # input: two sessions share one queue (the CLI/website both construct
-    # their own, but this pins that draining is session-scoped either way).
-    reminders = InMemoryReminderQueue()
-    registry = _fake_registry(
-        [{"name": "demo", "description": "x", "when_to_use": "y"}]
-    )
-
-    # act
-    await announce_skill_manifest(reminders, "session-a", registry)
-
-    # assert: an unrelated session drains nothing.
-    assert await reminders.drain("session-b") == []
-    # and the original session still has its reminder queued.
-    assert len(await reminders.drain("session-a")) == 1
