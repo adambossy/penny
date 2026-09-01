@@ -140,7 +140,7 @@ class BalanceAccount(AccountsGetAccount):
 
 
 class AccountsBalanceGetResponse(PlaidBaseModel):
-    accounts: list[BalanceAccount] = Field(default_factory=list)
+    accounts: list[BalanceAccount]
 
 
 class ItemModel(PlaidBaseModel):
