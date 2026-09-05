@@ -34,6 +34,21 @@ EXCLUDE_KEYWORDS = [
     "foreign exchange",
     "buy",
     "sell",
+    # Corporate actions: the shares change, no money moves. They match none of
+    # the trade words above ("Stock Split ... 2:1" is not a buy, a sell, or a
+    # dividend), so without these they fell through to the INCLUDE default and
+    # were put in front of the categorizer, which has nothing sensible to say
+    # about them — it labeled a spin-off "investment_buy". Phrases, not the bare
+    # word "split", so a payment that merely contains it is unaffected.
+    "stock split",
+    "reverse split",
+    "split ratio",
+    "spin-off",
+    "spinoff",
+    "spin off",
+    "merger",
+    "reorganization",
+    "name change",
 ]
 
 
