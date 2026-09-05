@@ -39,12 +39,17 @@ _STYLE = """
               text-overflow:ellipsis; }
   .tag { display:inline-block; background:#eee; border-radius:6px;
          padding:.05rem .4rem; font-size:.75rem; color:#555; }
+  /* A chevron so the field reads as a dropdown at rest — otherwise it looks
+     like a plain text box and the list goes undiscovered. */
   .combo { position:relative; }
+  .combo::after { content:"\\25be"; position:absolute; right:.55rem; top:50%;
+                  transform:translateY(-50%); color:#888; pointer-events:none;
+                  font-size:.8rem; }
   /* Category keys are long (parent.child); monospace at .8rem fits the
      longest of them in the column without truncating the reviewer's view of
      what they are about to confirm. */
   .combo input { font-family: ui-monospace, monospace; font-size:.8rem;
-                 width: 100%; padding:.35rem .4rem;
+                 width: 100%; padding:.35rem 1.4rem .35rem .4rem;
                  border:1px solid #ccc; border-radius:6px; box-sizing:border-box; }
   .combo input.changed { border-color:#c60; background:#fffaf5; }
   .combo input.saved { border-color:#0a7; background:#f4fff9; }
@@ -307,6 +312,26 @@ document.addEventListener('click', e => {{
   if (opt && active >= 0 && opt.dataset.n !== undefined) {{
     sel = Number(opt.dataset.n);
     commit(active);
+    return;
+  }}
+  // Clicking the field opens its menu. Without this the control only reveals
+  // itself once you type, so a click looks like a plain text box and the
+  // whole list stays hidden. Deliberately click-only, not focus: the
+  // keyboard run (Enter, Enter, Enter) advances by focus, and popping a menu
+  // open on every row would fight the flow it is meant to serve.
+  const input = e.target.closest('.combo') && e.target.id.startsWith('i')
+    ? e.target : null;
+  if (input) {{
+    const i = Number(input.id.slice(1));
+    if (active === i) closeMenu();
+    else {{
+      // Select the prefilled value so typing replaces it. A click alone only
+      // drops a caret, and the next keystrokes would append to the category
+      // already there ("Public Transit" + "groc"), matching nothing.
+      input.select();
+      sel = 0;
+      openMenu(i);
+    }}
     return;
   }}
   if (!e.target.closest('.combo')) closeMenu();
