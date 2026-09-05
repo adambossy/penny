@@ -22,6 +22,7 @@ from sqlalchemy import (
     event,
     func,
     inspect,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -73,6 +74,26 @@ def _needs_categorization_clause() -> Any:
         func.coalesce(DerivedTransaction.reporting_mode, "")
         != _SKIP_CATEGORIZATION_REPORTING_MODE
     )
+
+
+def _plaid_category_labels(raw: Any) -> dict[str, Any] | None:
+    """Plaid's ``personal_finance_category`` as flat labels (verbatim).
+
+    Plaid's taxonomy is reported as Plaid words, never mapped onto Penny's:
+    the mapping is a judgment call, and the review page exists to gather the
+    evidence for making it.
+    """
+    if not isinstance(raw, dict):
+        return None
+    primary = raw.get("primary")
+    detailed = raw.get("detailed")
+    if primary is None and detailed is None:
+        return None
+    return {
+        "primary": primary,
+        "detailed": detailed,
+        "confidence": raw.get("confidence_level"),
+    }
 
 
 _COMPACT_SCHEMA_MODELS: tuple[type[Base], ...] = (
@@ -3751,6 +3772,220 @@ class DB:
             )
             events = query.all()
             return [self._category_event_to_dict(event) for event in events]
+
+    # ------------------------------------------------------------------
+    # Review queue / golden dataset
+    #
+    # Human category labels are the only ground truth the categorizer can be
+    # scored against: prod's sync-time categorizer and the eval's replay are
+    # the same code path, so replaying one against the other measures nothing.
+    # ``reviewed_at`` marks the rows a person settled; the category-event log
+    # supplies what the categorizer had chosen for those rows on its own.
+    # ------------------------------------------------------------------
+
+    def pending_review_count(self) -> int:
+        """How many transactions are waiting to be reviewed."""
+        with self.session() as session:  # type: Session
+            return (
+                session.query(func.count(DerivedTransaction.transaction_id))
+                .select_from(DerivedTransaction)
+                .filter(*self._pending_review_filters())
+                .scalar()
+                or 0
+            )
+
+    @staticmethod
+    def _pending_review_filters() -> list[Any]:
+        """What "needs review" means, in one place (queue and count agree).
+
+        Unreviewed, not hidden, and only rows the categorizer was supposed to
+        decide: investment trades and dividends already carry
+        ``reporting_mode='DEFAULT_EXCLUDE'`` and are deliberately never
+        categorized, so reviewing them would ask for labels on decisions
+        nothing makes.
+        """
+        return [
+            DerivedTransaction.reviewed_at.is_(None),
+            DerivedTransaction.is_hidden.is_(False),
+            _needs_categorization_clause(),
+        ]
+
+    def transactions_pending_review(self, limit: int = 200) -> list[dict[str, Any]]:
+        """The review queue: unreviewed transactions, newest sync first.
+
+        Each row carries what a reviewer needs to judge it — the descriptor and
+        Plaid's fuller ``raw_name``, the amount/date, the categorizer's current
+        pick (prefilled in the page's combobox), and Plaid's own
+        ``personal_finance_category`` guess, verbatim and unmapped.
+        """
+        with self.session() as session:  # type: Session
+            rows = (
+                session.query(
+                    DerivedTransaction.transaction_id,
+                    DerivedTransaction.merchant_descriptor,
+                    DerivedTransaction.amount_cents,
+                    DerivedTransaction.posted_at,
+                    DerivedTransaction.created_at,
+                    DerivedTransaction.category_method,
+                    DerivedTransaction.is_verified,
+                    Category.key,
+                    Category.name,
+                    PlaidTransaction.raw_name,
+                    PlaidTransaction.personal_finance_category,
+                    PlaidAccount.name,
+                )
+                .select_from(DerivedTransaction)
+                .outerjoin(
+                    Category, Category.category_id == DerivedTransaction.category_id
+                )
+                .outerjoin(
+                    PlaidTransaction,
+                    PlaidTransaction.plaid_transaction_id
+                    == DerivedTransaction.plaid_transaction_id,
+                )
+                .outerjoin(
+                    PlaidAccount,
+                    PlaidAccount.account_id == PlaidTransaction.account_id,
+                )
+                .filter(*self._pending_review_filters())
+                .order_by(
+                    DerivedTransaction.created_at.desc(),
+                    DerivedTransaction.transaction_id.desc(),
+                )
+                .limit(limit)
+                .all()
+            )
+        return [
+            {
+                "transaction_id": r[0],
+                "merchant_descriptor": r[1],
+                "amount": (r[2] / 100.0) if r[2] is not None else None,
+                "posted_at": r[3].isoformat() if r[3] else None,
+                "synced_at": r[4].isoformat() if r[4] else None,
+                # The fast path reuses a verified descriptor without asking the
+                # model; surfaced so a reviewer knows the pick is a reuse.
+                "is_fast_path": bool(r[6]) and r[5] == "manual",
+                "agent_key": r[7],
+                "agent_name": r[8],
+                "raw_name": r[9],
+                "plaid_category": _plaid_category_labels(r[10]),
+                "account_name": r[11],
+            }
+            for r in rows
+        ]
+
+    def mark_transaction_reviewed(
+        self, transaction_id: int, category_id: int
+    ) -> dict[str, Any]:
+        """Record a human's category label — one row of the golden dataset.
+
+        Atomically: set the category (``method='manual'``, verified so the
+        categorizer's fast path reuses it for this descriptor), stamp
+        ``reviewed_at``, and append the category event. The event's
+        ``from_category_key`` is what the categorizer had chosen, so a
+        confirmation and a correction are both recorded, and the scoreboard
+        needs no replay to know what the agent said.
+
+        Raises:
+            ValueError: If the transaction does not exist.
+        """
+        with self.session() as session:  # type: Session
+            txn = session.get(DerivedTransaction, transaction_id)
+            if txn is None:
+                raise ValueError(f"Transaction {transaction_id} does not exist")
+
+            previous_key = None
+            if txn.category_id is not None:
+                previous = session.get(Category, txn.category_id)
+                previous_key = previous.key if previous is not None else None
+
+            self._apply_category_updates(
+                session,
+                updates={transaction_id: category_id},
+                method="manual",
+                reason="Reviewed on the review page.",
+                is_verified=True,
+            )
+            txn.reviewed_at = datetime.now()
+            session.flush()
+
+            new = session.get(Category, category_id)
+            return {
+                "transaction_id": transaction_id,
+                "agent_key": previous_key,
+                "human_key": new.key if new is not None else None,
+                "changed": previous_key != (new.key if new is not None else None),
+            }
+
+    def review_scoreboard(self) -> dict[str, Any]:
+        """Categorizer accuracy over the reviewed rows, plus Plaid's raw labels.
+
+        The agent's answer is the last ``llm`` event for the row — what the
+        categorizer chose before a human touched it, preserved through the
+        correction. Rows with no such event were never decided by the model
+        (fast-path reuse, or never categorized), so they are counted
+        separately rather than scored: including them would inflate accuracy
+        with decisions the model never made.
+
+        Plaid's ``personal_finance_category`` is reported as a raw
+        human-label × Plaid-label tally, not a score: mapping Plaid's taxonomy
+        onto Penny's is a judgment call, and this tally is the evidence to
+        make it with.
+        """
+        last_llm = (
+            select(
+                TransactionCategoryEvent.transaction_id.label("transaction_id"),
+                func.max(TransactionCategoryEvent.event_id).label("event_id"),
+            )
+            .where(TransactionCategoryEvent.method == "llm")
+            .group_by(TransactionCategoryEvent.transaction_id)
+            .subquery()
+        )
+        with self.session() as session:  # type: Session
+            rows = (
+                session.query(
+                    DerivedTransaction.transaction_id,
+                    DerivedTransaction.merchant_descriptor,
+                    DerivedTransaction.reviewed_at,
+                    Category.key,
+                    TransactionCategoryEvent.to_category_key,
+                    PlaidTransaction.personal_finance_category,
+                )
+                .select_from(DerivedTransaction)
+                .outerjoin(
+                    Category, Category.category_id == DerivedTransaction.category_id
+                )
+                .outerjoin(
+                    last_llm,
+                    last_llm.c.transaction_id == DerivedTransaction.transaction_id,
+                )
+                .outerjoin(
+                    TransactionCategoryEvent,
+                    TransactionCategoryEvent.event_id == last_llm.c.event_id,
+                )
+                .outerjoin(
+                    PlaidTransaction,
+                    PlaidTransaction.plaid_transaction_id
+                    == DerivedTransaction.plaid_transaction_id,
+                )
+                .filter(DerivedTransaction.reviewed_at.is_not(None))
+                .order_by(DerivedTransaction.reviewed_at.desc())
+                .all()
+            )
+        return {
+            "reviewed": len(rows),
+            "items": [
+                {
+                    "transaction_id": r[0],
+                    "merchant_descriptor": r[1],
+                    "reviewed_at": r[2].isoformat() if r[2] else None,
+                    "human_key": r[3],
+                    "agent_key": r[4],
+                    "plaid_category": _plaid_category_labels(r[5]),
+                }
+                for r in rows
+            ],
+        }
 
     def verified_category_for_descriptor(self, descriptor: str) -> str | None:
         """Most recent VERIFIED category key for an exact merchant descriptor.

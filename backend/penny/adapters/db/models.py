@@ -227,6 +227,15 @@ class DerivedTransaction(Base):
             postgresql_where=text("refund_of_transaction_id IS NOT NULL"),
             sqlite_where=text("refund_of_transaction_id IS NOT NULL"),
         ),
+        # Partial index: the review queue reads "unreviewed, newest first", so
+        # it stays cheap as the reviewed set outgrows the pending one.
+        # Mirrors migration 032 (idx_derived_transactions_pending_review).
+        Index(
+            "idx_derived_transactions_pending_review",
+            "created_at",
+            postgresql_where=text("reviewed_at IS NULL"),
+            sqlite_where=text("reviewed_at IS NULL"),
+        ),
     )
 
     transaction_id: Mapped[int] = mapped_column(
@@ -256,6 +265,13 @@ class DerivedTransaction(Base):
     is_verified: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("FALSE")
     )
+    # When a human last reviewed this row's category on the review page — the
+    # golden-dataset marker. Distinct from ``is_verified``, which the
+    # categorizer's fast path also sets when it reuses a verified descriptor:
+    # verified means "protected from bulk recategorization", reviewed means "a
+    # person looked at this one". Only the latter is ground truth, so accuracy
+    # is measured over reviewed rows alone.
+    reviewed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
     # User-controlled flag: rows the user has chosen to exclude from spending
     # analysis. Excluded by default in the agent's query filters (see
     # hide_transactions / unhide_transactions tools). NOT NULL DEFAULT FALSE
