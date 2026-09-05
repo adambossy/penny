@@ -15,7 +15,7 @@ def test_notice_names_the_backlog_and_links_the_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("PENNY_BASE_URL", raising=False)
-    subject, text, html = review_notice_content(pending=7, reviewed=42)
+    subject, text, html = review_notice_content(batch=7, total_pending=120, reviewed=42)
 
     assert "7 transaction(s) to review" == subject
     assert "http://localhost:8000/review" in text
@@ -23,8 +23,18 @@ def test_notice_names_the_backlog_and_links_the_page(
     assert "42" in text
 
 
+def test_subject_counts_the_batch_not_the_backlog() -> None:
+    """ "8371 to review" describes a chore; "14 to review" describes two minutes."""
+    subject, text, _ = review_notice_content(batch=14, total_pending=8371, reviewed=0)
+
+    assert subject == "14 transaction(s) to review"
+    assert "8371" not in subject
+    # The backlog is still stated, just not as the headline.
+    assert "8371 pending in all" in text
+
+
 def test_notice_is_still_sent_when_the_queue_is_empty() -> None:
-    subject, text, _ = review_notice_content(pending=0, reviewed=42)
+    subject, text, _ = review_notice_content(batch=0, total_pending=0, reviewed=42)
 
     assert subject == "Nothing to review"
     assert "labeled" in text
@@ -35,6 +45,6 @@ def test_base_url_override_makes_the_link_work_off_box(
 ) -> None:
     """The mail is read on a phone; the link must point at the reachable host."""
     monkeypatch.setenv("PENNY_BASE_URL", "http://penny.tail1234.ts.net:8000/")
-    _, text, _ = review_notice_content(pending=1, reviewed=0)
+    _, text, _ = review_notice_content(batch=1, total_pending=1, reviewed=0)
 
     assert "http://penny.tail1234.ts.net:8000/review" in text

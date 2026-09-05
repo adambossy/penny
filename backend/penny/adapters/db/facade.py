@@ -3810,51 +3810,107 @@ class DB:
             _needs_categorization_clause(),
         ]
 
-    def transactions_pending_review(self, limit: int = 200) -> list[dict[str, Any]]:
-        """The review queue: unreviewed transactions, newest sync first.
+    def _pending_day(self, session: Session, before: date | None = None) -> date | None:
+        """The newest sync day with unreviewed rows (older than ``before``)."""
+        day = func.date(DerivedTransaction.created_at)
+        query = session.query(func.max(day)).filter(*self._pending_review_filters())
+        if before is not None:
+            query = query.filter(day < before.isoformat())
+        found = query.scalar()
+        # SQLite returns the date as a string; Postgres as a date.
+        return date.fromisoformat(found) if isinstance(found, str) else found
+
+    def review_batch(
+        self,
+        *,
+        day: date | None = None,
+        all_days: bool = False,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """One sync day's worth of unreviewed transactions — the review batch.
+
+        A day is the unit on purpose: a sync brings in a handful of
+        transactions, which is a sitting's worth of labeling with a visible
+        end. Handing over the whole backlog instead turns a two-minute habit
+        into a chore nobody starts. ``day`` picks a specific one, ``all_days``
+        opens the floodgates for a deliberate catch-up session.
+
+        Returns the batch plus what the page needs to offer the next one:
+        the day shown, the count still pending beyond it, and the next older
+        day that has any.
+        """
+        with self.session() as session:  # type: Session
+            shown_day = None if all_days else (day or self._pending_day(session))
+            rows = self._pending_review_rows(session, shown_day, limit)
+            total = (
+                session.query(func.count(DerivedTransaction.transaction_id))
+                .filter(*self._pending_review_filters())
+                .scalar()
+                or 0
+            )
+            older_day = (
+                None
+                if all_days or shown_day is None
+                else self._pending_day(session, before=shown_day)
+            )
+        return {
+            "day": shown_day.isoformat() if shown_day else None,
+            "rows": rows,
+            "total_pending": total,
+            "older_pending": max(total - len(rows), 0),
+            "older_day": older_day.isoformat() if older_day else None,
+        }
+
+    def _pending_review_rows(
+        self, session: Session, day: date | None, limit: int
+    ) -> list[dict[str, Any]]:
+        """Unreviewed rows for one sync day (all days when ``day`` is None).
 
         Each row carries what a reviewer needs to judge it — the descriptor and
         Plaid's fuller ``raw_name``, the amount/date, the categorizer's current
         pick (prefilled in the page's combobox), and Plaid's own
         ``personal_finance_category`` guess, verbatim and unmapped.
         """
-        with self.session() as session:  # type: Session
-            rows = (
-                session.query(
-                    DerivedTransaction.transaction_id,
-                    DerivedTransaction.merchant_descriptor,
-                    DerivedTransaction.amount_cents,
-                    DerivedTransaction.posted_at,
-                    DerivedTransaction.created_at,
-                    DerivedTransaction.category_method,
-                    DerivedTransaction.is_verified,
-                    Category.key,
-                    Category.name,
-                    PlaidTransaction.raw_name,
-                    PlaidTransaction.personal_finance_category,
-                    PlaidAccount.name,
-                )
-                .select_from(DerivedTransaction)
-                .outerjoin(
-                    Category, Category.category_id == DerivedTransaction.category_id
-                )
-                .outerjoin(
-                    PlaidTransaction,
-                    PlaidTransaction.plaid_transaction_id
-                    == DerivedTransaction.plaid_transaction_id,
-                )
-                .outerjoin(
-                    PlaidAccount,
-                    PlaidAccount.account_id == PlaidTransaction.account_id,
-                )
-                .filter(*self._pending_review_filters())
-                .order_by(
-                    DerivedTransaction.created_at.desc(),
-                    DerivedTransaction.transaction_id.desc(),
-                )
-                .limit(limit)
-                .all()
+        query = (
+            session.query(
+                DerivedTransaction.transaction_id,
+                DerivedTransaction.merchant_descriptor,
+                DerivedTransaction.amount_cents,
+                DerivedTransaction.posted_at,
+                DerivedTransaction.created_at,
+                DerivedTransaction.category_method,
+                DerivedTransaction.is_verified,
+                Category.key,
+                Category.name,
+                PlaidTransaction.raw_name,
+                PlaidTransaction.personal_finance_category,
+                PlaidAccount.name,
             )
+            .select_from(DerivedTransaction)
+            .outerjoin(Category, Category.category_id == DerivedTransaction.category_id)
+            .outerjoin(
+                PlaidTransaction,
+                PlaidTransaction.plaid_transaction_id
+                == DerivedTransaction.plaid_transaction_id,
+            )
+            .outerjoin(
+                PlaidAccount,
+                PlaidAccount.account_id == PlaidTransaction.account_id,
+            )
+            .filter(*self._pending_review_filters())
+        )
+        if day is not None:
+            query = query.filter(
+                func.date(DerivedTransaction.created_at) == day.isoformat()
+            )
+        rows = (
+            query.order_by(
+                DerivedTransaction.created_at.desc(),
+                DerivedTransaction.transaction_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
         return [
             {
                 "transaction_id": r[0],

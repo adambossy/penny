@@ -14,6 +14,7 @@ Routes:
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -45,12 +46,18 @@ def build_review_router() -> APIRouter:
     router = APIRouter()
 
     @router.get("/review", response_class=HTMLResponse, include_in_schema=False)
-    async def review_page() -> HTMLResponse:
+    async def review_page(day: str | None = None, all: bool = False) -> HTMLResponse:
+        """One sync day's batch by default; ``?day=`` picks one, ``?all=1`` opens
+        the whole backlog for a deliberate catch-up session."""
         from penny.api.review_page import render_review_page
         from penny.db import get_db
 
-        rows = get_db().transactions_pending_review(limit=_QUEUE_LIMIT)
-        return HTMLResponse(render_review_page(rows, _categories()))
+        try:
+            chosen = date.fromisoformat(day) if day else None
+        except ValueError as exc:
+            raise HTTPException(400, f"Not a date: {day}") from exc
+        batch = get_db().review_batch(day=chosen, all_days=all, limit=_QUEUE_LIMIT)
+        return HTMLResponse(render_review_page(batch, _categories()))
 
     @router.get("/review/metrics", response_class=HTMLResponse, include_in_schema=False)
     async def review_metrics() -> HTMLResponse:

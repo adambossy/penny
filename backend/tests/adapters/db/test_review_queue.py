@@ -83,7 +83,7 @@ def test_queue_holds_unreviewed_rows_with_the_agents_pick(
     groceries = _category("food.groceries", "Groceries")
     tid = _txn("1", category_id=groceries, plaid_category={"primary": "FOOD_AND_DRINK"})
 
-    rows = db.transactions_pending_review()
+    rows = db.review_batch()["rows"]
 
     assert [r["transaction_id"] for r in rows] == [tid]
     # The page prefills its combobox from this, so a confirm is one keystroke.
@@ -104,7 +104,7 @@ def test_queue_skips_hidden_rows_and_uncategorizable_investment_trades(
     # there is no decision to review.
     _txn("trade", reporting_mode="DEFAULT_EXCLUDE", category_id=None, method=None)
 
-    assert [r["transaction_id"] for r in db.transactions_pending_review()] == [keep]
+    assert [r["transaction_id"] for r in db.review_batch()["rows"]] == [keep]
     assert db.pending_review_count() == 1
 
 
@@ -125,7 +125,7 @@ def test_labeling_removes_the_row_from_the_queue(
         "human_key": "food.restaurants",
         "changed": True,
     }
-    assert db.transactions_pending_review() == []
+    assert db.review_batch()["rows"] == []
     assert db.pending_review_count() == 0
     with db.session() as session:
         row = session.get(DerivedTransaction, tid)
@@ -147,8 +147,71 @@ def test_fast_path_verified_rows_are_not_mistaken_for_human_labels(
         session.get(DerivedTransaction, tid).is_verified = True
 
     # Still queued: verified, but nobody has looked at it.
-    assert [r["transaction_id"] for r in db.transactions_pending_review()] == [tid]
+    assert [r["transaction_id"] for r in db.review_batch()["rows"]] == [tid]
     assert db.review_scoreboard()["reviewed"] == 0
+
+
+def _sync_day(transaction_id: int, day: date) -> None:
+    """Backdate a row's sync timestamp so it lands in an earlier batch."""
+    from datetime import datetime
+
+    with get_db().session() as session:
+        session.get(DerivedTransaction, transaction_id).created_at = datetime(
+            day.year, day.month, day.day, 12, 0
+        )
+
+
+def test_batch_is_one_sync_day_not_the_whole_backlog(
+    isolated_db: pytest.FixtureRequest,
+) -> None:
+    """A sitting is a sync's worth of work, with the rest reachable but not shown.
+
+    Handing over every unreviewed transaction at once is what makes labeling a
+    chore nobody starts; the backlog stays one deliberate click away.
+    """
+    db = get_db()
+    db.create_schema()
+    groceries = _category("food.groceries", "Groceries")
+    today = _txn("today", category_id=groceries)
+    older = _txn("older", category_id=groceries)
+    oldest = _txn("oldest", category_id=groceries)
+    _sync_day(older, date(2026, 1, 9))
+    _sync_day(oldest, date(2026, 1, 8))
+
+    batch = db.review_batch()
+
+    assert [r["transaction_id"] for r in batch["rows"]] == [today]
+    assert batch["total_pending"] == 3
+    assert batch["older_pending"] == 2
+    # The page offers the next batch, so finishing one leads somewhere.
+    assert batch["older_day"] == "2026-01-09"
+
+    # An explicit day opens that batch...
+    assert [
+        r["transaction_id"] for r in db.review_batch(day=date(2026, 1, 9))["rows"]
+    ] == [older]
+    # ...and a deliberate catch-up session can still have everything.
+    every = db.review_batch(all_days=True)
+    assert len(every["rows"]) == 3
+    assert every["day"] is None
+
+
+def test_batch_moves_on_once_a_day_is_labeled(
+    isolated_db: pytest.FixtureRequest,
+) -> None:
+    db = get_db()
+    db.create_schema()
+    groceries = _category("food.groceries", "Groceries")
+    today = _txn("today", category_id=groceries)
+    older = _txn("older", category_id=groceries)
+    _sync_day(older, date(2026, 1, 9))
+
+    db.mark_transaction_reviewed(today, groceries)
+
+    # The newest day with work left becomes the batch.
+    batch = db.review_batch()
+    assert [r["transaction_id"] for r in batch["rows"]] == [older]
+    assert batch["older_day"] is None
 
 
 def test_scoreboard_scores_against_what_the_model_chose_itself(

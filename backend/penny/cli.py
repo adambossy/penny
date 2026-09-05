@@ -321,8 +321,8 @@ def notify_review() -> None:
         typer.echo(f"Review notice failed: {exc}", err=True)
         raise typer.Exit(1) from exc
     typer.echo(
-        f"Review notice sent: {summary['pending']} pending, "
-        f"{summary['reviewed']} labeled"
+        f"Review notice sent: {summary['batch']} in the latest batch, "
+        f"{summary['pending']} pending in all, {summary['reviewed']} labeled"
     )
 
 

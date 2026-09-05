@@ -73,23 +73,42 @@ _STYLE = """
 """
 
 
-def render_review_page(
-    rows: list[dict[str, Any]], categories: list[dict[str, str]]
-) -> str:
-    """The labeling page: one row per transaction, prefilled with the agent's pick."""
+def render_review_page(batch: dict[str, Any], categories: list[dict[str, str]]) -> str:
+    """The labeling page: one sync day's batch, prefilled with the agent's picks."""
+    rows = batch["rows"]
+    day = batch.get("day")
+    older_day, older_pending = batch.get("older_day"), batch.get("older_pending") or 0
+    # Where "you're done with this batch" sends you next. Offering the next
+    # older day (rather than the whole backlog) keeps every sitting bounded.
+    next_link = (
+        f'<a href="/review?day={older_day}">Review {older_day} '
+        f"({older_pending} older waiting) &rarr;</a>"
+        if older_day
+        else '<a href="/review/metrics">See the scoreboard &rarr;</a>'
+    )
+    # The backlog is reachable but never the default view: someone who wants a
+    # long catch-up session can ask for one, and nobody is handed one unasked.
+    backlog_note = (
+        f' &middot; <a href="/review?all=1">{batch["total_pending"]} pending in all</a>'
+        if day and batch.get("total_pending", 0) > len(rows)
+        else ""
+    )
     if not rows:
         body = (
             '<div class="empty"><p class="big">Nothing to review</p>'
-            "<p>Every synced transaction has been labeled. "
-            '<a href="/review/metrics">See the scoreboard &rarr;</a></p></div>'
+            f"<p>{next_link}</p></div>"
         )
     else:
+        scope = f"synced {html.escape(day)}" if day else "all pending"
         body = f"""
 <div class="bar">
   <span class="count"><span id="left">{len(rows)}</span> to review</span>
-  <span class="hint">Enter confirms and moves on &middot; type to change &middot;
-    &uarr;&darr; to pick &middot; Esc to skip</span>
+  <span class="hint">{scope} &middot; Enter confirms and moves on &middot;
+    type to change &middot; &uarr;&darr; to pick &middot; Esc to skip</span>
   <span id="err" class="err"></span>
+</div>
+<div id="done" class="empty" hidden>
+  <p class="big">Batch done</p><p>{next_link}</p>
 </div>
 <table><thead><tr>
   <th style="width:34%">Transaction</th><th class="amt">Amount</th>
@@ -103,7 +122,7 @@ def render_review_page(
 <h1>Review categories</h1>
 <p class="meta">Confirm or correct the categorizer, one transaction at a time.
   Your labels are the ground truth it gets scored against &middot;
-  <a href="/review/metrics">scoreboard &rarr;</a></p>
+  <a href="/review/metrics">scoreboard &rarr;</a>{backlog_note}</p>
 {body}
 <script>
 const ROWS = {json.dumps(rows)};
@@ -197,7 +216,16 @@ function openMenu(i) {{
 }}
 
 function focusRow(i) {{
-  if (i < 0 || i >= ROWS.length) return;
+  // Past the end with nothing left: the batch is finished, so say so and
+  // offer the next one rather than leaving the reviewer on a grey table.
+  if (i >= ROWS.length) {{
+    if (remaining === 0) {{
+      const done = document.getElementById('done');
+      if (done) {{ done.hidden = false; done.scrollIntoView({{block: 'center'}}); }}
+    }}
+    return;
+  }}
+  if (i < 0) return;
   const input = document.getElementById('i' + i);
   if (!input || input.disabled) {{ focusRow(i + 1); return; }}
   document.querySelectorAll('tr.active').forEach(t => t.classList.remove('active'));

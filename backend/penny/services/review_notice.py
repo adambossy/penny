@@ -28,21 +28,29 @@ def _review_url() -> str:
     return f"{base}/review"
 
 
-def review_notice_content(pending: int, reviewed: int) -> tuple[str, str, str]:
-    """Subject, text and HTML for the daily notice."""
+def review_notice_content(
+    batch: int, total_pending: int, reviewed: int
+) -> tuple[str, str, str]:
+    """Subject, text and HTML for the daily notice.
+
+    The subject counts the BATCH the link opens — a sync day's handful — not
+    the whole backlog. A subject reading "8,371 to review" describes a chore
+    nobody starts; "14 to review" describes two minutes.
+    """
     url = _review_url()
-    if pending:
-        subject = f"{pending} transaction(s) to review"
+    if batch:
+        subject = f"{batch} transaction(s) to review"
         lead = (
-            f"{pending} transaction(s) are waiting for a category label. "
-            "Confirming the categorizer's pick is one keystroke each."
+            f"{batch} transaction(s) from the latest sync are waiting for a "
+            "category label. Confirming the categorizer's pick is one keystroke."
         )
     else:
         subject = "Nothing to review"
         lead = "Every synced transaction has been labeled."
+    backlog = f" ({total_pending} pending in all)" if total_pending > batch else ""
     tail = (
-        f"{reviewed} transaction(s) labeled so far — the ground truth the "
-        "categorizer is scored against."
+        f"{reviewed} transaction(s) labeled so far{backlog} — the ground truth "
+        "the categorizer is scored against."
     )
     text = f"{lead}\n\n{url}\n\n{tail}\n"
     html = f'<p>{lead}</p><p><a href="{url}">Open the review page</a></p><p>{tail}</p>'
@@ -59,9 +67,12 @@ def send_review_notice() -> dict[str, object]:
     from penny.db import get_db
 
     db = get_db()
-    pending = db.pending_review_count()
+    batch = db.review_batch()
+    pending_now = len(batch["rows"])
     reviewed = db.review_scoreboard()["reviewed"]
-    subject, text, html = review_notice_content(pending, reviewed)
+    subject, text, html = review_notice_content(
+        pending_now, batch["total_pending"], reviewed
+    )
 
     recipients = resolve_report_recipients()
     result = build_email_service().send_report(
@@ -70,9 +81,16 @@ def send_review_notice() -> dict[str, object]:
     if not result.success:
         raise RuntimeError(f"review notice not delivered: {result.error}")
     logger.info(
-        "review notice sent to {}: {} pending, {} labeled",
+        "review notice sent to {}: {} in the {} batch, {} pending, {} labeled",
         ", ".join(recipients),
-        pending,
+        pending_now,
+        batch["day"] or "all",
+        batch["total_pending"],
         reviewed,
     )
-    return {"pending": pending, "reviewed": reviewed, "recipients": recipients}
+    return {
+        "batch": pending_now,
+        "pending": batch["total_pending"],
+        "reviewed": reviewed,
+        "recipients": recipients,
+    }
