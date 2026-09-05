@@ -18,7 +18,7 @@ from penny.adapters.db.models import (
     PlaidTransaction,
     TransactionCategoryEvent,
 )
-from penny.api.app import create_app
+from penny.api.app import AppConfig, create_app
 from penny.db import get_db
 
 
@@ -87,6 +87,26 @@ def test_review_page_renders_the_queue(isolated_db: pytest.FixtureRequest) -> No
     # fetches to be usable.
     assert str(tid) in res.text
     assert agent_key in res.text
+
+
+def test_review_survives_the_spa_static_mount(
+    isolated_db: pytest.FixtureRequest, tmp_path
+) -> None:
+    """``penny serve`` mounts the built frontend at /, which owns every path.
+
+    The review router has to be included ahead of that mount or the page is
+    silently served the SPA's index.html instead — a break that only shows up
+    with a built frontend present, i.e. never in the other tests here.
+    """
+    _seed()
+    (tmp_path / "index.html").write_text("<html>SPA</html>")
+    with TestClient(create_app(AppConfig(static_dir=tmp_path))) as client:
+        review = client.get("/review")
+        assert review.status_code == 200
+        assert "Jubilee Market" in review.text  # the page, not the SPA shell
+        assert client.get("/review/metrics").status_code == 200
+        # The SPA still owns everything else.
+        assert "SPA" in client.get("/").text
 
 
 def test_label_records_the_human_choice(isolated_db: pytest.FixtureRequest) -> None:
