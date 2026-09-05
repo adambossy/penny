@@ -83,7 +83,7 @@ class AppConfig:
 
 def create_app(config: AppConfig | None = None) -> FastAPI:
     """Build the chat API app from ``config`` (single-player defaults)."""
-    from penny.api import routes
+    from penny.api import review, routes
     from penny.bootstrap import bootstrap
 
     cfg = config or AppConfig()
@@ -108,6 +108,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(
         routes.build_router(turn_wiring=cfg.turn_wiring), dependencies=dependencies
     )
+    # Before the static mount below, which otherwise swallows /review.
+    app.include_router(review.build_review_router(), dependencies=dependencies)
     for router in cfg.extra_routers:
         app.include_router(router, dependencies=dependencies)
 
