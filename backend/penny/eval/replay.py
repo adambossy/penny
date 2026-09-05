@@ -1,6 +1,6 @@
 """Replay the categorizer on one transaction and capture its decision.
 
-Runs against whatever ``get_db()`` currently points at (the eval job points it at
+Runs against whatever ``get_db()`` currently points at (a backtest points it at
 the disposable branch). Captures what the DB never stores — confidence, the tools
 consulted, and the Langfuse trace link — by reading the agent's
 ``submit_categorization`` call, mirroring the review-harness capture.

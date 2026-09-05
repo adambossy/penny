@@ -93,6 +93,15 @@ def _balances_job(hour: int) -> dict[str, Any]:
     return {"period": "daily", "hour": hour}
 
 
+# The review notice, phrased the same way. It is deliberately outside the
+# ``[[jobs]]`` email cap: the cap exists to stop several *agent-written*
+# reports landing at once, while this is a one-line transactional notice that
+# doubles as the pipeline's heartbeat — suppressing it would delete the very
+# signal that says the pipeline is alive.
+def _review_notice_job(hour: int) -> dict[str, Any]:
+    return {"period": "daily", "hour": hour}
+
+
 def _periodic_is_due(
     state: dict[str, Any], key: str, job: dict[str, Any], now_utc: datetime
 ) -> bool:
@@ -206,9 +215,10 @@ def run_daemon() -> None:
     jobs = load_jobs()
     logger.info(
         "penny daemon up: sync every {}h; balances daily at {}:00 NY; "
-        "report jobs [{}], max {} email(s)/day",
+        "review notice daily at {}:00 NY; report jobs [{}], max {} email(s)/day",
         schedule["sync_interval_hours"],
         schedule["balances_hour"],
+        schedule["review_notice_hour"],
         ", ".join(job["name"] for job in jobs),
         schedule["max_emails_per_day"],
     )
@@ -222,5 +232,8 @@ def run_daemon() -> None:
         balances_job = _balances_job(schedule["balances_hour"])
         if _periodic_is_due(state, "balances", balances_job, now):
             _run_periodic(state, "balances", balances_job, ["capture-balances"], now)
+        review_job = _review_notice_job(schedule["review_notice_hour"])
+        if _periodic_is_due(state, "review_notice", review_job, now):
+            _run_periodic(state, "review_notice", review_job, ["notify-review"], now)
         _tick_reports(state, now, jobs, schedule["max_emails_per_day"])
         time.sleep(_TICK_SECONDS)

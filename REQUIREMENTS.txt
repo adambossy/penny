@@ -244,11 +244,21 @@ T13. System-reminder subsystem & onboarding state
      turn, never stored. Enforced by backend/tests/test_reminder_e2e.py,
      tests/test_onboarding.py, tests/test_reminder_queue.py.
 
-T14. Categorizer-eval isolation & signal
-     The categorizer eval replays the agent on an in-process, writable
-     SQLite snapshot — during the untrusted replay the process-global DB
-     points at the snapshot so the agent can never reach the primary. A
-     failure records a durable eval_runs row without advancing the
-     watermark, and every run emits exactly one status email, so a stopped
-     or broken pipeline is never silent. Enforced by
-     backend/tests/eval/test_job.py.
+T14. Categorizer ground truth & signal
+     Categorizer accuracy is measured against HUMAN labels, never against a
+     replay of the categorizer itself: the sync-time categorizer and any
+     replay of it are one code path, so replay agreement measures nothing
+     (the retired daily eval reported ~100% by construction). The review
+     page (/review) records those labels; each stamps reviewed_at, which
+     is what the scoreboard counts. is_verified must NOT be used for this —
+     the categorizer's fast path also sets it, so a verified row may never
+     have been seen by a person. A row is scored against what the model
+     chose unaided (its last 'llm' category event, preserved through the
+     human's correction); rows with no such event — a fast-path reuse, or
+     never categorized — are reported separately, never as correct.
+     Plaid's personal_finance_category is reported verbatim beside the
+     labels, unmapped and unscored, as the evidence for a future mapping.
+     A daily notice email is sent whether or not anything is pending, so a
+     stopped pipeline is never silent. Enforced by
+     backend/tests/adapters/db/test_review_queue.py,
+     backend/tests/api/test_review_routes.py.

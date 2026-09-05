@@ -38,6 +38,9 @@ SCHEDULE_DEFAULTS: dict[str, int] = {
     # runs — ahead of the default 08:00 report slot so a morning report can
     # cite the day's fresh balances.
     "balances_hour": 6,
+    # Hour (New-York local, 0-23) for the "transactions to review" notice.
+    # After the morning report slot, so the day's mail arrives together.
+    "review_notice_hour": 9,
 }
 
 # The cadence fields each period type carries on top of the common ones

@@ -304,39 +304,26 @@ def capture_balances() -> None:
         )
 
 
-@app.command("eval-categorizer")
-def eval_categorizer(
-    limit: int = typer.Option(
-        None,
-        "--limit",
-        min=1,
-        help="Sample the most recent N (for testing); a limited run does not "
-        "advance the watermark.",
-    ),
-    email: list[str] = typer.Option(
-        None, "--email", help="Recipient(s) for the per-run status email (repeatable)."
-    ),
-) -> None:
-    """Run one categorizer eval.
+@app.command("notify-review")
+def notify_review() -> None:
+    """Email the daily "transactions to review" notice (run by ``penny daemon``).
 
-    Snapshots finance data into a local writable SQLite copy, replays the new
-    agent on the copy, records durable eval rows, and emails a status line
-    (with the report when legacy and agent disagree). Right/wrong is read later
-    from your corrections — there is no staging step.
+    Sent every day whether or not anything is pending, so the message is also
+    the pipeline's heartbeat: no email means sync or the daemon stopped.
     """
-    from penny.eval.job import run_eval
-    import penny.observability as observability
+    from penny.bootstrap import bootstrap
+    from penny.services.review_notice import send_review_notice
 
+    bootstrap()
     try:
-        result = asyncio.run(run_eval(limit=limit, email_to=email or None))
+        summary = send_review_notice()
     except Exception as exc:
-        typer.echo(f"Eval failed: {exc}", err=True)
+        typer.echo(f"Review notice failed: {exc}", err=True)
         raise typer.Exit(1) from exc
-    finally:
-        # Force-flush spans so per-turn traces export before this short-lived
-        # process exits (no-op when Langfuse is disabled).
-        observability.flush()
-    typer.echo(f"Eval {result.get('status')}: {result}")
+    typer.echo(
+        f"Review notice sent: {summary['pending']} pending, "
+        f"{summary['reviewed']} labeled"
+    )
 
 
 @app.command("init")
