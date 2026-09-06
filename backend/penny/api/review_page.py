@@ -29,6 +29,9 @@ _STYLE = """
        padding:.4rem .5rem; }
   td { border-bottom:1px solid #f0f0f0; padding:.5rem; vertical-align: top; }
   tr.done { opacity:.45; }
+  /* Dimmed at rest so confirmed rows recede, full strength when you go back
+     to one — correcting a label should not mean squinting at it. */
+  tr.done:hover, tr.done:focus-within { opacity:1; }
   tr.active td { background:#f6f6ff; }
   .desc { font-weight:600; }
   .sub { color:#888; font-size:.85rem; word-break:break-word; }
@@ -54,6 +57,9 @@ _STYLE = """
                  border:1px solid #ccc; border-radius:6px; box-sizing:border-box; }
   .combo input.changed { border-color:#c60; background:#fffaf5; }
   .combo input.saved { border-color:#0a7; background:#f4fff9; }
+  /* Confirmed rows carry the mark, since they are no longer disabled — a
+     saved label stays editable so a misclick can be corrected in place. */
+  .combo.is-saved::after { content:"\\2713"; color:#0a7; font-weight:600; }
   .menu { position:absolute; z-index:10; left:0; right:0; top:100%;
           background:#fff; border:1px solid #ccc; border-radius:6px;
           box-shadow:0 6px 18px rgba(0,0,0,.12); max-height:16rem;
@@ -199,6 +205,7 @@ let active = -1;          // row index whose menu is open
 let sel = 0;              // highlighted option within that menu
 let opts = [];            // current option list
 let remaining = ROWS.length;
+const saved = new Set();  // row indices already confirmed this page load
 
 function closeMenu() {{
   if (active >= 0) document.getElementById('m' + active).classList.remove('open');
@@ -235,7 +242,10 @@ function showDone() {{
 function focusRow(i) {{
   if (i >= ROWS.length || i < 0) return;
   const input = document.getElementById('i' + i);
-  if (!input || input.disabled) {{ focusRow(i + 1); return; }}
+  // Skip rows already confirmed, not merely disabled ones: a saved row is
+  // re-enabled so it can be corrected, and the keyboard run should still
+  // walk past it. Clicking one is how you go back.
+  if (!input || saved.has(i)) {{ focusRow(i + 1); return; }}
   document.querySelectorAll('tr.active').forEach(t => t.classList.remove('active'));
   document.getElementById('r' + i).classList.add('active');
   input.focus();
@@ -258,18 +268,28 @@ async function save(i, key) {{
     input.title = key;
     input.classList.remove('changed');
     input.classList.add('saved');
+    input.closest('.combo').classList.add('is-saved');
     document.getElementById('r' + i).classList.add('done');
-    remaining -= 1;
-    document.getElementById('left').textContent = remaining;
+    // Only the first save of a row spends one off the counter — a correction
+    // re-saves the same row and must not count twice.
+    if (!saved.has(i)) {{
+      saved.add(i);
+      remaining -= 1;
+      document.getElementById('left').textContent = remaining;
+    }}
     showDone();
     return true;
   }} catch (e) {{
-    // Leave the row editable and in the queue: a failed write must not look
-    // like a recorded label.
+    // Leave the row in the queue: a failed write must not look like a
+    // recorded label.
     errEl.textContent = 'Could not save: ' + e.message;
-    input.disabled = false;
     input.classList.remove('saved');
+    input.closest('.combo').classList.remove('is-saved');
     return false;
+  }} finally {{
+    // Re-enabled either way, so a label can be corrected after the fact. The
+    // disable is only a guard against double-submitting while in flight.
+    input.disabled = false;
   }}
 }}
 
