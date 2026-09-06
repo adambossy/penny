@@ -12,6 +12,7 @@ pages are testable without a server.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 import html
 import json
 from typing import Any
@@ -350,6 +351,72 @@ focusRow(0);
 """
 
 
+def _accuracy_chart(scored: list[dict[str, Any]], days: int = 60) -> str:
+    """Day-over-day exact-match accuracy as inline SVG.
+
+    Bars, not a line: labelled days are sparse and irregular, and a line
+    between two points a fortnight apart implies data that isn't there. The
+    x-axis is ordinal for the same reason — one slot per labelled day, not a
+    date scale with gaps. A day resting on two labels is drawn exactly like
+    one resting on twenty, so the counts live in each bar's hover text.
+    """
+    cutoff = (datetime.now().date() - timedelta(days=days)).isoformat()
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for it in scored:
+        day = it.get("synced_on")
+        if day and day >= cutoff:
+            by_day.setdefault(day, []).append(it)
+    if not by_day:
+        return (
+            '<p class="sub">No labelled transactions in the last '
+            f"{days} days yet — the trend appears once you have reviewed a day."
+            "</p>"
+        )
+
+    w, h, pad_l, pad_b, pad_t = 900, 220, 34, 42, 10
+    plot_h = h - pad_b - pad_t
+    ordered = sorted(by_day.items())
+    slot = (w - pad_l - 8) / len(ordered)
+    bars, labels = [], []
+    for i, (day, rows) in enumerate(ordered):
+        right = sum(1 for r in rows if r["agent_key"] == r["human_key"])
+        acc = right / len(rows)
+        bw = max(6.0, min(slot * 0.7, 34.0))
+        x = pad_l + i * slot + (slot - bw) / 2
+        # A 0% day still gets a visible stub — otherwise it draws as nothing
+        # and an all-wrong day is indistinguishable from a day with no data.
+        bh = max(acc * plot_h, 2.0)
+        y = pad_t + plot_h - bh
+        colour = "#0a7" if acc >= 0.9 else ("#c60" if acc >= 0.7 else "#c33")
+        bars.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bw:.1f}" height="{bh:.1f}" '
+            f'fill="{colour}" rx="2"><title>{html.escape(day)}: '
+            f"{right}/{len(rows)} correct ({acc:.0%})</title></rect>"
+        )
+        # Only label the ends and a middle tick; more than that overlaps.
+        if i in {0, len(ordered) - 1, len(ordered) // 2}:
+            labels.append(
+                f'<text x="{x + bw / 2:.1f}" y="{h - pad_b + 14}" '
+                f'text-anchor="middle" font-size="10" fill="#888">'
+                f"{html.escape(day[5:])}</text>"
+            )
+    grid = "".join(
+        f'<line x1="{pad_l}" y1="{pad_t + plot_h - f * plot_h:.1f}" x2="{w - 8}" '
+        f'y2="{pad_t + plot_h - f * plot_h:.1f}" stroke="#eee"/>'
+        f'<text x="4" y="{pad_t + plot_h - f * plot_h + 4:.1f}" font-size="10" '
+        f'fill="#888">{int(f * 100)}%</text>'
+        for f in (0, 0.5, 1.0)
+    )
+    total_days = len(ordered)
+    return (
+        f'<svg viewBox="0 0 {w} {h}" width="100%" height="{h}" '
+        f'role="img" aria-label="Exact-match accuracy by sync day">'
+        f"{grid}{''.join(bars)}{''.join(labels)}</svg>"
+        f'<p class="sub">{total_days} day(s) with labels in the last {days}. '
+        "Hover a bar for its counts.</p>"
+    )
+
+
 def render_metrics_page(scoreboard: dict[str, Any], pending: int) -> str:
     """The scoreboard: how the categorizer does against the human labels."""
     items = scoreboard["items"]
@@ -362,6 +429,7 @@ def render_metrics_page(scoreboard: dict[str, Any], pending: int) -> str:
     )
     unscored = len(items) - len(scored)
     pct = lambda n, d: f"{100 * n / d:.0f}%" if d else "—"  # noqa: E731
+    chart = _accuracy_chart(scored)
 
     misses = [it for it in scored if it["agent_key"] != it["human_key"]][:100]
     miss_rows = (
@@ -414,6 +482,13 @@ def render_metrics_page(scoreboard: dict[str, Any], pending: int) -> str:
 <p class="meta">"Not scored" are labeled rows the model never decided on its own —
   a fast-path reuse of an earlier label, or never categorized. Counting them
   would inflate accuracy with decisions the model didn't make.</p>
+
+<h2>Accuracy by day</h2>
+<p class="meta">Exact-match accuracy for each sync day you have labelled, over
+  the last 60 days. Bars are grouped by the day the transactions arrived, not
+  the day you reviewed them, so the trend tracks the categorizer rather than
+  your labelling schedule.</p>
+{chart}
 
 <h2>Corrections</h2>
 <p class="meta">Where your label differs from what the categorizer chose.</p>

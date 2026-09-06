@@ -4006,6 +4006,7 @@ class DB:
                     Category.key,
                     TransactionCategoryEvent.to_category_key,
                     PlaidTransaction.personal_finance_category,
+                    DerivedTransaction.created_at,
                 )
                 .select_from(DerivedTransaction)
                 .outerjoin(
@@ -4038,6 +4039,11 @@ class DB:
                     "human_key": r[3],
                     "agent_key": r[4],
                     "plaid_category": _plaid_category_labels(r[5]),
+                    # Sync day, not review day: the trend worth watching is how
+                    # the categorizer did on each day's transactions. Grouping
+                    # by when you happened to label them would put a backlog
+                    # session's whole history on one bar.
+                    "synced_on": r[6].date().isoformat() if r[6] else None,
                 }
                 for r in rows
             ],
