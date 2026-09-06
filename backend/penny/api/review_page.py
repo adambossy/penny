@@ -221,17 +221,19 @@ function openMenu(i) {{
   if (cur) cur.scrollIntoView({{block: 'nearest'}});
 }}
 
-function focusRow(i) {{
-  // Past the end with nothing left: the batch is finished, so say so and
-  // offer the next one rather than leaving the reviewer on a grey table.
-  if (i >= ROWS.length) {{
-    if (remaining === 0) {{
-      const done = document.getElementById('done');
-      if (done) {{ done.hidden = false; done.scrollIntoView({{block: 'center'}}); }}
-    }}
-    return;
+function showDone() {{
+  // Owned by the last save landing, not by focus reaching the end: focus now
+  // runs ahead of the in-flight requests, so at the moment it passes the last
+  // row the batch is typically still one response short of finished.
+  const done = document.getElementById('done');
+  if (done && remaining === 0) {{
+    done.hidden = false;
+    done.scrollIntoView({{block: 'center'}});
   }}
-  if (i < 0) return;
+}}
+
+function focusRow(i) {{
+  if (i >= ROWS.length || i < 0) return;
   const input = document.getElementById('i' + i);
   if (!input || input.disabled) {{ focusRow(i + 1); return; }}
   document.querySelectorAll('tr.active').forEach(t => t.classList.remove('active'));
@@ -259,6 +261,7 @@ async function save(i, key) {{
     document.getElementById('r' + i).classList.add('done');
     remaining -= 1;
     document.getElementById('left').textContent = remaining;
+    showDone();
     return true;
   }} catch (e) {{
     // Leave the row editable and in the queue: a failed write must not look
@@ -281,7 +284,13 @@ function commit(i) {{
     return;
   }}
   closeMenu();
-  save(i, key).then(ok => {{ if (ok) focusRow(i + 1); }});
+  // Advance BEFORE the round-trip, not after it. save() disables this input
+  // immediately, so waiting on the response leaves focus parked on a disabled
+  // field — which fires no key events, and every Enter pressed in that gap is
+  // silently dropped. Confirming a batch at typing speed lost most of its
+  // keystrokes that way.
+  focusRow(i + 1);
+  save(i, key);
 }}
 
 document.addEventListener('input', e => {{
