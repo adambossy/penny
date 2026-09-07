@@ -37,12 +37,17 @@ apply_config_to_env()
 # Import _logging first so the file sink is installed before anything
 # downstream emits its first log line.
 from penny import _logging  # noqa: E402, F401  side-effect: install file sink
-from penny.api.app import AppConfig, create_app, default_static_dir  # noqa: E402
+from penny.api.app import AppConfig, create_app  # noqa: E402
 from penny.observability import init_sentry  # noqa: E402
+from penny.services.frontend_build import default_dist_candidate  # noqa: E402
 
 # Initialize error tracking before the app is built so startup and
 # request-handler failures are reported. Idempotent + no-op when unconfigured.
 init_sentry()
 
-# Serve the built web UI, same as `penny serve` (see `default_static_dir`).
-app = create_app(AppConfig(static_dir=default_static_dir()))
+# Serve the built web UI, on the same stamp check `penny serve` applies.
+# Deliberately the PURE resolver, not `resolve_frontend_dist`: this runs at
+# ASGI import, where a rebuild would block every worker's boot on npm, race
+# them over one dist, and re-run on each `--reload`. A stale dist degrades to
+# API-only here; `penny serve` is the deliberate invocation that rebuilds it.
+app = create_app(AppConfig(static_dir=default_dist_candidate()))

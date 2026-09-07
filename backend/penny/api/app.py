@@ -79,30 +79,11 @@ class AppConfig:
     extra_routers: Sequence[APIRouter] = ()
     cors_origins: Sequence[str] = ("http://localhost:5173",)
     # Built frontend; served at / when set. Defaults to None rather than
-    # `default_static_dir()` deliberately: that helper is repo-relative, and a
-    # host composing this app (penny-web) ships no `frontend/dist` beside the
-    # package — it must opt in explicitly or get API-only. Single-player front
-    # doors are the ones that pass `default_static_dir()`.
+    # resolving the repo's own dist deliberately: a host composing this app
+    # (penny-web) ships no `frontend/dist` beside the package, so it must opt
+    # in explicitly or get API-only. The single-player front doors are the
+    # ones that pass `services.frontend_build`'s answer.
     static_dir: Path | None = None
-
-
-def default_static_dir() -> Path | None:
-    """The repo's built web UI (``frontend/dist``), or ``None`` when unbuilt.
-
-    Resolves the UI for the default ``penny.api.main`` instance, which is
-    imported by uvicorn at module scope. That import-time call is the whole
-    constraint on this function: it must stay pure — a stat and nothing else.
-    Never route it through ``services.frontend_build.resolve_frontend_dist``,
-    which can shell out to ``npm install && npm run build``: that would block
-    every worker's boot on a multi-minute build, race them over one dist, and
-    re-run on each ``--reload``. ``penny serve`` is a deliberate, interactive
-    invocation and can afford that; an ASGI import cannot.
-
-    ``None`` (nothing built yet) is the API-only case, not an error: the Vite
-    dev server proxies to it.
-    """
-    candidate = Path(__file__).resolve().parents[3] / "frontend" / "dist"
-    return candidate if candidate.is_dir() else None
 
 
 def create_app(config: AppConfig | None = None) -> FastAPI:

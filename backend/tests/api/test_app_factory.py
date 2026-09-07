@@ -13,7 +13,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.testclient import TestClient
 
-from penny.api.app import AppConfig, TurnProvision, create_app, default_static_dir
+from penny.api.app import AppConfig, TurnProvision, create_app
+from penny.services.frontend_build import default_dist_candidate
 
 
 def _auth_dependency(request: Request) -> None:
@@ -74,7 +75,7 @@ def test_default_app_needs_no_auth(isolated_db):
     assert client.get("/").status_code == 404
 
 
-def test_default_instance_mounts_the_ui_that_default_static_dir_resolves():
+def test_default_instance_mounts_the_stamped_dist():
     """The actual regression: `penny.api.main` was built as a bare
     `create_app()`, so the documented dev-loop command served /api but 404'd
     `/` and every SPA route while `penny serve` worked — one checkout, two
@@ -82,12 +83,14 @@ def test_default_instance_mounts_the_ui_that_default_static_dir_resolves():
 
     `create_app`'s own static handling was never broken, so exercising that
     would pass against the bug; what has to be pinned is main.py's *wiring*.
-    Phrased as an equality with `default_static_dir()` so it holds either way:
-    an unbuilt checkout legitimately mounts nothing.
+    Asserting against `default_dist_candidate()` — the same resolver
+    `penny serve` accepts a dist through — is what keeps the two front doors
+    from drifting apart again on the stamp check rather than on presence. An
+    unbuilt or unstamped checkout legitimately mounts nothing.
     """
     import penny.api.main as main
 
-    expected = default_static_dir()
+    expected = default_dist_candidate()
     mounts = [r for r in main.app.routes if getattr(r, "name", None) == "frontend"]
 
     if expected is None:
