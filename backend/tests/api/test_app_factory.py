@@ -69,6 +69,9 @@ def test_authed_requests_pass_and_extra_router_mounts(isolated_db):
 def test_default_app_needs_no_auth(isolated_db):
     client = TestClient(create_app())
     assert client.get("/api/health").json() == {"ok": True}
+    # No static_dir (the default) is the API-only case, not an error — the
+    # Vite dev server proxies to it — so `/` 404s rather than failing to boot.
+    assert client.get("/").status_code == 404
 
 
 def test_default_instance_mounts_the_ui_that_default_static_dir_resolves():
@@ -111,13 +114,3 @@ def test_static_dir_serves_the_spa_without_shadowing_the_api(isolated_db, tmp_pa
         unknown_api = client.get("/api/no-such-route")
         assert unknown_api.status_code == 404
         assert unknown_api.json() == {"detail": "Not Found"}
-
-
-def test_no_static_dir_leaves_the_api_alone(isolated_db):
-    """Nothing built yet is the API-only case, not an error (the Vite dev
-    server proxies to it) — so `/` 404s rather than the app refusing to boot."""
-    client = TestClient(create_app(AppConfig(static_dir=None)))
-
-    with client:
-        assert client.get("/api/health").json() == {"ok": True}
-        assert client.get("/").status_code == 404
