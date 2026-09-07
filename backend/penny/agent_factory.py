@@ -202,30 +202,14 @@ AgentModel = (
 )
 """Every model shape ``build_model`` can return."""
 
-# The harness's US_FP8_ZDR allowlist has gone stale: of its six providers only
-# novita, baseten and io-net still serve ``z-ai/glm-5.3-flash`` (decart and
-# atlas-cloud serve neither GLM model; venice's endpoint no longer declares a
-# quantization), so an upstream rate limit had almost nowhere to fall back to
-# and scheduled report runs died ~30% of the time on their first call. These
-# four satisfy the same US-headquartered/FP8-or-better/ZDR predicate, verified
-# live on 2026-08-30 by intersecting
-# ``/api/v1/models/z-ai/glm-5.3-flash/endpoints`` with
-# ``/api/v1/endpoints/zdr``.
-#
-# ``replace`` rather than a fresh RoutingPolicy so every other field — the
-# quantization floor, zdr, data_collection, sort, allow_fallbacks — is
-# *derived* from the harness's policy instead of coincidentally matching
-# RoutingPolicy's defaults; a field the harness adds or retunes carries over
-# on its own. ``only`` is the exception: it is additive, so these four names
-# are frozen here and never re-vetted, however the predicate moves. That is
-# survivable rather than correct — ``zdr``/``data_collection`` are hard
-# filters OpenRouter applies server-side, so one that stopped being ZDR is
-# excluded at routing time regardless — but it is why this list needs
-# periodic re-verification rather than trusting inheritance.
-#
-# This widening is really the harness's homework (its own US_FP8_ZDR docstring
-# flags that the counts were never re-verified against GLM-5.3), so it belongs
-# upstream in agent-harness; it lives here only until that lands (fly-162).
+# Only three of US_FP8_ZDR's six providers still serve ``z-ai/glm-5.3-flash``,
+# so an upstream rate limit had almost nowhere to fall back to and report runs
+# died ~30% of the time on their first call. These four meet the same
+# US/FP8/ZDR predicate (verified live 2026-08-30). ``replace`` so every other
+# field stays *derived* from the harness policy rather than coincidentally
+# matching RoutingPolicy's defaults; only ``only`` is frozen, which is why the
+# list needs periodic re-verification rather than trusting inheritance.
+# Belongs upstream in agent-harness — it lives here until that lands (fly-162).
 _WIDE_US_FP8_ZDR = replace(
     US_FP8_ZDR, only=US_FP8_ZDR.only + ("modal", "deepinfra", "parasail", "reka")
 )
@@ -246,22 +230,16 @@ _OPENROUTER_ROUTING: dict[str, RoutingPolicy] = {
 _OPENROUTER_MAX_RETRIES = 5
 """Pre-stream retry budget for OpenRouter calls (anthropic SDK ``max_retries``).
 
-OpenRouter surfaces an upstream rate limit as a plain HTTP 429 (measured
-2026-08-30: no ``Retry-After`` header). The SDK's default budget of 2 (~3.5 s
-of backoff) is shorter than the windows glm-5.3-flash was observed limited
-for; 5 (~15 s) rides them out.
+OpenRouter surfaces an upstream rate limit as a plain 429 with no
+``Retry-After``; the SDK's default budget of 2 (~3.5 s) is shorter than the
+windows glm-5.3-flash was observed limited for, and 5 (~15 s) rides them out.
 
-The load-bearing case is the INTERACTIVE path — a chat turn or ``penny run``,
-where a 429 becomes a red banner and there is no outer retry. Scheduled
-reports already have a better one: a failed job never records its period, so
-``daemon.py``'s next tick re-runs it a minute later. The cost lands on that
-same interactive path, per model call rather than per run: a turn that makes
-N calls can stall N × ~15 s before its first token while every routable
-endpoint is failing. That is the trade this constant makes, and it is
-defense-in-depth behind ``_WIDE_US_FP8_ZDR`` above — the wider fallback set,
-not this, is what should usually save the call. Only OpenRouter carries the
-raised budget: it fans out to third-party upstreams that rate-limit
-independently, where the first-party providers below do not.
+The case this serves is the INTERACTIVE one — a chat turn has no outer retry,
+where a failed scheduled report is simply re-run by ``daemon.py``'s next tick.
+It is also where the cost lands, per model call rather than per run: a turn
+making N calls can stall N × ~15 s before its first token. A stopgap riding
+alongside ``_WIDE_US_FP8_ZDR`` (the wider fallback set is what should usually
+save the call), and retired with it — see fly-162.
 """
 
 
