@@ -12,6 +12,8 @@ for.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from agent_harness.core.credentials import ApiKeyCredential
 from agent_harness.core.errors import ConfigError
 from agent_harness.providers.anthropic import OPUS_5, AnthropicMessagesModel
@@ -105,16 +107,27 @@ def test_kimi_k3_pins_moonshot_direct_routing() -> None:
     assert model.routing.only == ("moonshotai",)
 
 
-def test_glm_keeps_the_harness_default_routing() -> None:
-    """Only K3 needs the opt-in; GLM stays on the vetted US/FP8/ZDR set."""
-    model = build_model(name=GLM_5_3)
-    assert model.routing == US_FP8_ZDR
+def test_unpinned_openrouter_models_get_the_widened_policy() -> None:
+    """The widened set is the DEFAULT, so a newly-offered OpenRouter model
+    cannot silently regress to the narrow policy that caused the outage.
+
+    Exact equality, not a superset check: every field but ``only`` must be
+    derived from the harness policy rather than merely matching its defaults,
+    so a field the harness adds or retunes carries over on its own.
+    """
+    # Neither GLM id is in _OPENROUTER_ROUTING, so both go through the default
+    # branch — the same one a newly-offered OpenRouter model would take.
+    for name in (GLM_5_3, GLM_5_3_FLASH):
+        assert build_model(name=name).routing == replace(
+            US_FP8_ZDR,
+            only=US_FP8_ZDR.only + ("modal", "deepinfra", "parasail", "reka"),
+        )
 
 
-def test_glm_flash_keeps_the_harness_default_routing() -> None:
-    """GLM-5.3-Flash is routed the same as GLM-5.3."""
-    model = build_model(name=GLM_5_3_FLASH)
-    assert model.routing == US_FP8_ZDR
+def test_openrouter_models_widen_the_sdk_retry_budget() -> None:
+    """The SDK's default of 2 is shorter than the observed rate-limit windows,
+    leaving the interactive path (no outer retry) surfacing a 429 as an error."""
+    assert build_model(name=GLM_5_3_FLASH).provider.client.max_retries > 2
 
 
 def test_env_selects_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:

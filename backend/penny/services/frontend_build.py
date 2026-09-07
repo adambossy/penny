@@ -29,6 +29,9 @@ _NO_FRONTEND_MESSAGE = (
     "Build it with `npm run build` in frontend/."
 )
 
+# .../backend/penny/services/frontend_build.py -> the checkout root.
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
 
 def _expected_app_id() -> str:
     """The app identity every build stamps (``frontend/app-id.json``).
@@ -36,8 +39,7 @@ def _expected_app_id() -> str:
     The single source both ``vite.config.ts`` and this verifier read, so the
     two languages can't drift apart on what "built by this app" means.
     """
-    repo_root = Path(__file__).resolve().parent.parent.parent.parent
-    path = repo_root / "frontend" / "app-id.json"
+    path = _REPO_ROOT / "frontend" / "app-id.json"
     return json.loads(path.read_text(encoding="utf-8"))["app"]
 
 
@@ -55,6 +57,22 @@ def _build_stamp(dist: Path) -> dict | None:
 def _dist_ok(dist: Path) -> bool:
     """True when ``dist`` carries this app's build stamp."""
     return _build_stamp(dist) is not None
+
+
+def default_dist_candidate(repo_root: Path | None = None) -> Path | None:
+    """The repo's ``frontend/dist`` when it exists and is one of our builds.
+
+    The pure half of :func:`resolve_frontend_dist`: a couple of stats and a
+    small JSON read, with no output, no rebuild, and no process exit. That is
+    what makes it usable from ``penny.api.main``, which resolves the UI at
+    ASGI import time and so must never shell out to npm (see that module).
+
+    Both front doors answer "is this dist servable?" through here, so the
+    stamp check can't apply to one and not the other — an unstamped or
+    foreign dist (a stale pre-split build, say) is refused for both.
+    """
+    candidate = (repo_root or _REPO_ROOT) / "frontend" / "dist"
+    return candidate if candidate.is_dir() and _dist_ok(candidate) else None
 
 
 # Inputs that determine what a build actually produces. `node_modules`
@@ -164,7 +182,7 @@ def resolve_frontend_dist(
         return static
 
     if repo_root is None:
-        repo_root = Path(__file__).resolve().parent.parent.parent.parent
+        repo_root = _REPO_ROOT
     frontend_dir = repo_root / "frontend"
     candidate = frontend_dir / "dist"
     if not frontend_dir.exists():
@@ -186,7 +204,8 @@ def resolve_frontend_dist(
             )
             return None
 
-    if candidate.exists() and _dist_ok(candidate):
-        return candidate
+    stamped = default_dist_candidate(repo_root)
+    if stamped is not None:
+        return stamped
     typer.echo(_NO_FRONTEND_MESSAGE)
     return None

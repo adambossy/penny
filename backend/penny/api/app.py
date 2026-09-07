@@ -78,7 +78,12 @@ class AppConfig:
     turn_wiring: TurnWiring = field(default_factory=LocalTurnWiring)
     extra_routers: Sequence[APIRouter] = ()
     cors_origins: Sequence[str] = ("http://localhost:5173",)
-    static_dir: Path | None = None  # built frontend; served at / when set
+    # Built frontend; served at / when set. Defaults to None rather than
+    # resolving the repo's own dist deliberately: a host composing this app
+    # (penny-web) ships no `frontend/dist` beside the package, so it must opt
+    # in explicitly or get API-only. The single-player front doors are the
+    # ones that pass `services.frontend_build`'s answer.
+    static_dir: Path | None = None
 
 
 def create_app(config: AppConfig | None = None) -> FastAPI:

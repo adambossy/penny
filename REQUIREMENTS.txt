@@ -111,7 +111,11 @@ P14. CLI onboarding
 
 P15. Local web app, no accounts
     `penny serve` runs the complete product in one process on
-    127.0.0.1:8000 — API plus the built web UI. There are no accounts, no
+    127.0.0.1:8000 — API plus the built web UI. Both single-player front
+    doors serve that UI: `penny serve` and the default ASGI instance
+    (`penny.api.main:app`), so a checkout cannot serve the app one way and
+    404 it the other. An unbuilt frontend degrades to API-only (the Vite
+    dev server proxies to it). There are no accounts, no
     sign-in, no landing page. Remote access (e.g. from a phone) is the
     user's network choice: Tailscale is the documented path; a bare ngrok
     URL is warned against. Penny ships no auth layer of its own.
@@ -212,6 +216,15 @@ T7. Single source of truth
     skills in backend/.agent/skills (the plugin symlinks them). No value is
     duplicated across homes.
 
+    penny.prompts is the only door to LOADING prompts, and the prompt root
+    is anchored to the package, never to the process's working directory —
+    entrypoints Penny does not control the CWD of (the P4 daemon runs from
+    `/`; `penny mcp` inherits the user's project directory) would otherwise
+    each resolve a different, often empty, prompt directory. See prompts.py
+    for the mechanism. (backend/penny/eval/version.py still reads
+    .prompts/_meta.json directly for its version stamp — the remaining
+    exception to the no-duplicated-homes rule above.)
+
 T8. One database, one user
     Finance and app-bookkeeping tables live in ONE database (the app tables
     namespaced app_*), on SQLite opened in WAL mode so the server, daemon,
@@ -233,6 +246,19 @@ T10. Layered domain architecture (target)
      enter via explicit providers/seams. New code adheres; code a change
      touches migrates toward it under the campfire rule with strict scope
      limits. See AGENTS.md ("Architecture: layered domains").
+
+T11. Model routing posture (OpenRouter)
+     Every OpenRouter-served model routes under zero-data-retention with
+     data collection denied and an FP8-or-better floor — the outbound
+     counterpart to T8's database privacy boundary. The provider allowlist
+     is the DEFAULT for OpenRouter models, not a per-model opt-in: a model
+     pins a narrower policy only when no endpoint satisfies the standard
+     one (Kimi K3 has a single non-US endpoint). Penny's widening of that
+     allowlist is a temporary local override of an agent-harness constant
+     (see T4) tracked by fly-162, and its provider list is verified against
+     the live endpoint/ZDR APIs rather than inherited, because the harness
+     tuple it extends is additive here. Enforced by
+     backend/tests/test_model_provider_selection.py.
 
 T13. System-reminder subsystem & onboarding state
      Dynamic onboarding/nudge state never enters the (cache-stable) system

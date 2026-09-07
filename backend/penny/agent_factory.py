@@ -14,6 +14,7 @@ conversation carries its own session. Tools come from five sources:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 import os
 from pathlib import Path
@@ -31,6 +32,7 @@ from agent_harness.providers.openai import OpenAIProvider, OpenAIResponsesModel
 from agent_harness.providers.openrouter import (
     KIMI_K3,
     MOONSHOT_DIRECT,
+    US_FP8_ZDR,
     OpenRouterModel,
     OpenRouterProvider,
     RoutingPolicy,
@@ -200,15 +202,45 @@ AgentModel = (
 )
 """Every model shape ``build_model`` can return."""
 
-# Per-model routing overrides for OpenRouter-served models. Kimi K3 has
-# exactly one upstream endpoint (moonshotai/int4), so the harness's default
-# US_FP8_ZDR policy matches zero endpoints and every request 404s — pinning
-# MOONSHOT_DIRECT here means no caller has to know that. Absent means the
-# harness default. NOT a list of known models: which models exist is the
-# harness catalogue's business, and which are offered is ``model_selection``'s.
-_OPENROUTER_ROUTING: dict[str, RoutingPolicy | None] = {
+# Only three of US_FP8_ZDR's six providers still serve ``z-ai/glm-5.3-flash``,
+# so an upstream rate limit had almost nowhere to fall back to and report runs
+# died ~30% of the time on their first call. These four meet the same
+# US/FP8/ZDR predicate (verified live 2026-08-30). ``replace`` so every other
+# field stays *derived* from the harness policy rather than coincidentally
+# matching RoutingPolicy's defaults; only ``only`` is frozen, which is why the
+# list needs periodic re-verification rather than trusting inheritance.
+# Belongs upstream in agent-harness — it lives here until that lands (fly-162).
+_WIDE_US_FP8_ZDR = replace(
+    US_FP8_ZDR, only=US_FP8_ZDR.only + ("modal", "deepinfra", "parasail", "reka")
+)
+
+# Routing EXCEPTIONS for OpenRouter-served models; everything else gets
+# _WIDE_US_FP8_ZDR. Kimi K3 has exactly one upstream endpoint
+# (moonshotai/int4), which no US/FP8/ZDR policy can match — every request 404s
+# — so it pins MOONSHOT_DIRECT and no caller has to know that. Deliberately
+# only the exceptions: a new OpenRouter model gets the widened set by default,
+# because defaulting to the narrow one is exactly what caused the outage above.
+# NOT a list of known models: which models exist is the harness catalogue's
+# business, and which are offered is ``model_selection``'s.
+_OPENROUTER_ROUTING: dict[str, RoutingPolicy] = {
     KIMI_K3: MOONSHOT_DIRECT,
 }
+
+
+_OPENROUTER_MAX_RETRIES = 5
+"""Pre-stream retry budget for OpenRouter calls (anthropic SDK ``max_retries``).
+
+OpenRouter surfaces an upstream rate limit as a plain 429 with no
+``Retry-After``; the SDK's default budget of 2 (~3.5 s) is shorter than the
+windows glm-5.3-flash was observed limited for, and 5 (~15 s) rides them out.
+
+The case this serves is the INTERACTIVE one — a chat turn has no outer retry,
+where a failed scheduled report is simply re-run by ``daemon.py``'s next tick.
+It is also where the cost lands, per model call rather than per run: a turn
+making N calls can stall N × ~15 s before its first token. A stopgap riding
+alongside ``_WIDE_US_FP8_ZDR`` (the wider fallback set is what should usually
+save the call), and retired with it — see fly-162.
+"""
 
 
 _ENV_KEY_BY_PROVIDER = {
@@ -253,10 +285,11 @@ def _build_openrouter_model(
     """
     return OpenRouterModel(
         provider=OpenRouterProvider(
-            credential=_env_credential(credential, "openrouter", name)
+            credential=_env_credential(credential, "openrouter", name),
+            max_retries=_OPENROUTER_MAX_RETRIES,
         ),
         name=name,
-        routing=_OPENROUTER_ROUTING.get(name),
+        routing=_OPENROUTER_ROUTING.get(name, _WIDE_US_FP8_ZDR),
     )
 
 
