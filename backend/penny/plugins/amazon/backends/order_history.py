@@ -16,7 +16,7 @@ per order rather than trying to squeeze it out of the list view.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import date
 import hashlib
 from typing import Any, Literal
@@ -109,6 +109,43 @@ def _clamp_positive_quantity(value: int) -> int:
     behavior seen on prices), never a genuine order state.
     """
     return value if value > 0 else 1
+
+
+# How far apart (in cents) the item math is allowed to land from the order
+# total before an itemization is distrusted. Kept at a single cent — just
+# enough to absorb a stray unit-price rounding artifact — rather than
+# something looser to accommodate real discounts (a gift card, a
+# promotional credit) that legitimately push item-subtotal+tax+shipping away
+# from the charged total: arithmetic alone cannot tell "the LLM dropped a
+# line item" (observed short by $25.46 on one real order, three orders of
+# magnitude past this tolerance) apart from "a real discount applied", and
+# under-trusting a good extraction is strictly safer than over-trusting a
+# corrupt one — a false positive here just means one order falls back to the
+# lump-sum 1:1 split it would have gotten anyway before per-item scraping
+# existed, not a wrong answer.
+RECONCILIATION_TOLERANCE_CENTS = 1
+
+
+def _order_reconciles(
+    order_total_cents: int,
+    item_amounts_cents: Sequence[int],
+    tax_cents: int,
+    shipping_cents: int,
+    *,
+    tolerance_cents: int = RECONCILIATION_TOLERANCE_CENTS,
+) -> bool:
+    """Whether the detail page's parts (items + tax + shipping) account for
+    the order's total, within ``tolerance_cents``.
+
+    ``order_total_cents`` always comes from the list page, which — unlike
+    per-item price/ASIN/quantity — Amazon does render reliably there (see
+    module docstring); the detail page's own items/tax/shipping are what
+    might be wrong. A mismatch means the detail-page extraction dropped or
+    misvalued something and the resulting itemization must not be trusted
+    silently.
+    """
+    parts_total = sum(item_amounts_cents) + tax_cents + shipping_cents
+    return abs(parts_total - order_total_cents) <= tolerance_cents
 
 
 class ExtractedItem(BaseModel):
@@ -564,6 +601,35 @@ class OrderHarvester:
             logger.info(
                 "Detail page for order {} yielded no items; keeping list-page items",
                 order.order_id,
+            )
+            return order
+
+        item_amounts = [item.unit_price_cents * item.quantity for item in detail.items]
+        if not _order_reconciles(
+            order.order_total_cents,
+            item_amounts,
+            detail.tax_cents,
+            detail.shipping_cents,
+        ):
+            # An itemization whose parts don't sum to the charge is corrupt —
+            # the LLM extraction is known to silently drop line items on some
+            # runs (verified: 18 items one run, 17 the next on the SAME
+            # order, short by exactly one item's price). Persisting it would
+            # look complete while quietly misattributing spend. Discard the
+            # detail-page items and fall back to the list-page's placeholder
+            # (empty) ones, exactly like the "no items extracted" case above
+            # — the splitter already turns that into a single lump-sum
+            # transaction rather than a wrong itemization.
+            logger.warning(
+                "Order {}: itemization does not reconcile (items {} + tax {} + "
+                "shipping {} = {} cents, order total is {} cents); discarding "
+                "extracted items and falling back to a lump-sum transaction",
+                order.order_id,
+                sum(item_amounts),
+                detail.tax_cents,
+                detail.shipping_cents,
+                sum(item_amounts) + detail.tax_cents + detail.shipping_cents,
+                order.order_total_cents,
             )
             return order
 

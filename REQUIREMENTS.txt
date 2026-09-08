@@ -104,6 +104,24 @@ P5. Amazon itemization
     every order. This is a hardcoded property of the backend, not a
     caller-settable default.
 
+    A detail-page extraction is reconciled before it is trusted: item
+    unit-price×quantity, summed across every extracted line item, plus tax
+    plus shipping must equal the order's total (from the reliably-rendered
+    list page), within a 1-cent tolerance for rounding artifacts. The LLM
+    extraction has been observed to silently drop a line item on some runs
+    of the very same order that reconciled exactly on another run, so a
+    non-reconciling extraction is never persisted as-is — it is discarded
+    in favor of the order's list-page (item-less) data, the same fallback
+    already used when a detail page yields no items at all, which
+    downstream leaves the order as a single lump-sum transaction rather
+    than a wrong itemization. The tolerance is deliberately tight rather
+    than widened for known legitimate mismatches (a gift card, a
+    promotional credit): arithmetic alone can't distinguish a real discount
+    from a dropped item, and under-trusting a good extraction (one
+    infrequent order falls back to a lump sum it would have gotten anyway
+    before per-item scraping existed) is strictly safer than over-trusting
+    a corrupt one (silently wrong per-item spend attribution).
+
 P6. Conversation persistence
     Persist conversations and messages so chat history survives across
     sessions: browse history (newest-first) in a drawer, open any past

@@ -14,6 +14,7 @@ from datetime import date
 from typing import Any
 
 from penny.plugins.amazon.backends.order_history import (
+    RECONCILIATION_TOLERANCE_CENTS,
     ExtractedDetailItem,
     ExtractedItem,
     ExtractedOrder,
@@ -21,6 +22,7 @@ from penny.plugins.amazon.backends.order_history import (
     ExtractedOrders,
     OrderHarvester,
     _item_identity,
+    _order_reconciles,
     _to_scraped_order,
     detail_url,
     page_url,
@@ -210,6 +212,103 @@ def test_to_scraped_order_gives_each_distinct_blank_asin_item_a_distinct_identit
     assert len(set(asins)) == len(asins)
 
 
+# --- _order_reconciles: the reconciliation guard's arithmetic --------------
+
+
+def test_order_reconciles_when_parts_sum_exactly_to_the_total() -> None:
+    # Verified live: order 112-1567047-9261808, item subtotal $473.63 + tax
+    # $29.48 = order total $503.11, exactly.
+    assert _order_reconciles(50311, [47363], 2948, 0) is True
+
+
+def test_order_reconciles_sums_multiple_item_amounts() -> None:
+    assert _order_reconciles(1000, [400, 300, 200], 100, 0) is True
+
+
+def test_order_does_not_reconcile_when_short_by_a_dropped_item() -> None:
+    # Verified live: one run of the same order above dropped the Burt's Bees
+    # Baby Wearable Blanket and came back short by exactly $25.46.
+    assert _order_reconciles(50311, [47363 - 2546], 2948, 0) is False
+
+
+def test_order_reconciles_within_the_one_cent_tolerance() -> None:
+    assert _order_reconciles(1000, [999], 0, 0) is True
+    assert _order_reconciles(1000, [1001], 0, 0) is True
+
+
+def test_order_does_not_reconcile_two_cents_off() -> None:
+    assert _order_reconciles(1000, [998], 0, 0) is False
+    assert _order_reconciles(1000, [1002], 0, 0) is False
+
+
+def test_order_reconciles_tolerance_is_configurable() -> None:
+    # A caller could choose to widen tolerance; the default constant used by
+    # _with_detail is exercised above via the default argument.
+    assert RECONCILIATION_TOLERANCE_CENTS == 1
+    assert _order_reconciles(1000, [950], 0, 0, tolerance_cents=50) is True
+    assert _order_reconciles(1000, [949], 0, 0, tolerance_cents=50) is False
+
+
+def test_order_reconciles_includes_shipping_and_tax_in_the_sum() -> None:
+    assert _order_reconciles(1000, [700], tax_cents=200, shipping_cents=100) is True
+    assert _order_reconciles(1000, [700], tax_cents=200, shipping_cents=50) is False
+
+
+def test_order_reconciles_with_no_items_and_zero_total() -> None:
+    assert _order_reconciles(0, [], 0, 0) is True
+
+
+# --- OrderHarvester._with_detail: the reconciliation guard in place --------
+
+
+async def test_with_detail_discards_items_when_they_dont_reconcile() -> None:
+    # Same shape as the real bug: the detail page comes back internally
+    # consistent-looking (no error, non-empty items) but short of the order
+    # total by more than a dropped-item's worth of cents.
+    detail = ExtractedOrderDetail(
+        taxCents=200,
+        shippingCents=100,
+        items=[
+            ExtractedDetailItem(
+                asin="B0123456789",
+                description="Widget",
+                unitPriceCents=1000,  # 1000 + 200 + 100 = 1300, not 5000
+                quantity=1,
+            )
+        ],
+    )
+    session = _FakeSession(extract_result=detail)
+    harvester = OrderHarvester()
+
+    result = await harvester._with_detail(session, _bare_order())
+
+    # Falls back exactly like "detail page yielded no items": keep the
+    # list-page order untouched rather than persist the short itemization.
+    assert result == _bare_order()
+
+
+async def test_with_detail_keeps_items_when_they_reconcile() -> None:
+    detail = ExtractedOrderDetail(
+        taxCents=200,
+        shippingCents=100,
+        items=[
+            ExtractedDetailItem(
+                asin="B0123456789",
+                description="Widget",
+                unitPriceCents=4700,
+                quantity=1,
+            )
+        ],
+    )
+    session = _FakeSession(extract_result=detail)
+    harvester = OrderHarvester()
+
+    result = await harvester._with_detail(session, _bare_order())
+
+    assert len(result.items) == 1
+    assert result.items[0].price_cents == 4700
+
+
 # --- OrderHarvester._with_detail: the per-order enrichment step ------------
 
 
@@ -340,7 +439,8 @@ async def test_with_detail_gives_distinct_identity_to_asin_less_items_with_diffe
     session = _FakeSession(extract_result=detail)
     harvester = OrderHarvester()
 
-    enriched = await harvester._with_detail(session, _bare_order())
+    order = _bare_order().model_copy(update={"order_total_cents": 1500})
+    enriched = await harvester._with_detail(session, order)
 
     asins = [item.asin for item in enriched.items]
     assert all(asin.startswith("NOASIN-") for asin in asins)
@@ -363,7 +463,8 @@ async def test_with_detail_collides_asin_less_items_with_identical_content() -> 
     session = _FakeSession(extract_result=detail)
     harvester = OrderHarvester()
 
-    enriched = await harvester._with_detail(session, _bare_order())
+    order = _bare_order().model_copy(update={"order_total_cents": 1000})
+    enriched = await harvester._with_detail(session, order)
 
     asins = [item.asin for item in enriched.items]
     assert asins[0] == asins[1]
@@ -396,7 +497,8 @@ async def test_with_detail_matches_real_asins_by_description_not_position() -> N
         ]
 
     harvester._link_reader = fake_link_reader
-    enriched = await harvester._with_detail(session, _bare_order())
+    order = _bare_order().model_copy(update={"order_total_cents": 7100})
+    enriched = await harvester._with_detail(session, order)
 
     assert [item.asin for item in enriched.items] == ["B012345678", "B098765432"]
 
@@ -424,7 +526,8 @@ async def test_with_detail_ignores_extra_unrelated_links_on_the_page() -> None:
         ]
 
     harvester._link_reader = fake_link_reader
-    enriched = await harvester._with_detail(session, _bare_order())
+    order = _bare_order().model_copy(update={"order_total_cents": 4700})
+    enriched = await harvester._with_detail(session, order)
 
     assert enriched.items[0].asin == "B012345678"
 
@@ -447,7 +550,8 @@ async def test_with_detail_leaves_asin_synthetic_when_no_link_names_the_item() -
         return [("https://www.amazon.com/dp/B098765432", "Something unrelated")]
 
     harvester._link_reader = fake_link_reader
-    enriched = await harvester._with_detail(session, _bare_order())
+    order = _bare_order().model_copy(update={"order_total_cents": 4700})
+    enriched = await harvester._with_detail(session, order)
 
     assert enriched.items[0].asin.startswith("NOASIN-")
 
@@ -467,7 +571,8 @@ async def test_with_detail_falls_back_when_link_reader_raises() -> None:
         raise RuntimeError("CDP connection dropped")
 
     harvester._link_reader = broken_link_reader
-    enriched = await harvester._with_detail(session, _bare_order())
+    order = _bare_order().model_copy(update={"order_total_cents": 4700})
+    enriched = await harvester._with_detail(session, order)
 
     assert enriched.items[0].asin.startswith("NOASIN-")
 
@@ -488,7 +593,8 @@ async def test_with_detail_leaves_llm_asin_untouched_when_no_reader_configured()
     session = _FakeSession(extract_result=detail)
     harvester = OrderHarvester()
 
-    enriched = await harvester._with_detail(session, _bare_order())
+    order = _bare_order().model_copy(update={"order_total_cents": 4700})
+    enriched = await harvester._with_detail(session, order)
 
     assert enriched.items[0].asin == "B0123456789"
 
