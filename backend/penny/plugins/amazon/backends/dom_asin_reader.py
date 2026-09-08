@@ -31,6 +31,7 @@ Browserbase CDP attach is future work if a real need shows up.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Sequence
 import re
 import socket
 from typing import TYPE_CHECKING, Any
@@ -78,28 +79,124 @@ def free_local_port() -> int:
         return sock.getsockname()[1]
 
 
-def parse_asins_from_hrefs(hrefs: list[str]) -> list[str]:
-    """Extract ASINs from product-link hrefs, in first-seen order, deduped.
+def _asin_from_href(href: str) -> str:
+    """The ASIN in a single product-link href, or ``""`` if it doesn't match.
 
     Accepts both `/dp/<ASIN>` and `/gp/product/<ASIN>`. An href that matches
     neither shape (a non-product link the broad CSS selector still caught,
-    e.g. a review-page link) is silently skipped rather than raising —
-    partial ASIN recovery beats none.
+    e.g. a review-page link) yields ``""`` rather than raising.
+    """
+    match = _ASIN_HREF_PATTERN.search(href)
+    return match.group(1).upper() if match else ""
+
+
+def parse_asins_from_hrefs(hrefs: list[str]) -> list[str]:
+    """Extract ASINs from product-link hrefs, in first-seen order, deduped.
+
+    Partial ASIN recovery beats none: an href with no ASIN-shaped match is
+    silently skipped rather than raising.
     """
     seen: dict[str, None] = {}
     for href in hrefs:
-        match = _ASIN_HREF_PATTERN.search(href)
-        if match is None:
-            continue
-        seen.setdefault(match.group(1).upper(), None)
+        asin = _asin_from_href(href)
+        if asin:
+            seen.setdefault(asin, None)
     return list(seen)
+
+
+# Minimum length (after normalization) the shorter side of a prefix match
+# must reach before that prefix is trusted. Guards against a short, generic
+# description ("Book", "Set of 2") spuriously prefix-matching an unrelated
+# link's anchor text; a genuine Amazon product title — full or truncated —
+# is always much longer than this in practice.
+_MIN_PREFIX_MATCH_CHARS = 12
+
+
+def _normalize_title(text: str) -> str:
+    """Case- and whitespace-insensitive form of a product title, for matching."""
+    return " ".join(text.split()).casefold()
+
+
+def _titles_match(description: str, anchor_text: str) -> bool:
+    """Whether an extracted item's description and a link's anchor text name
+    the same product.
+
+    Exact match after normalization is the common case: on a real order's
+    detail page, the line items' anchor text is verbatim the same string the
+    LLM extraction returns as `description` (see module docstring). When it
+    isn't, the LLM's description is usually a truncated PREFIX of the full
+    title (occasionally the reverse) — so a prefix match in either direction
+    is also accepted, guarded by `_MIN_PREFIX_MATCH_CHARS` so a short,
+    generic description can't spuriously match an unrelated link.
+    """
+    desc = _normalize_title(description)
+    anchor = _normalize_title(anchor_text)
+    if not desc or not anchor:
+        return False
+    if desc == anchor:
+        return True
+    shorter, longer = (desc, anchor) if len(desc) <= len(anchor) else (anchor, desc)
+    return len(shorter) >= _MIN_PREFIX_MATCH_CHARS and longer.startswith(shorter)
+
+
+def match_items_to_links(
+    descriptions: Sequence[str], links: Sequence[tuple[str, str]]
+) -> list[str]:
+    """Match each item description to a DOM product link's ASIN, by content.
+
+    Positional (count-aligned) matching is unsound here: a real order-detail
+    page mixes actual line-item links with unrelated ones (recommendation
+    widgets, "buy it again", a promo banner), so the number of product links
+    on the page essentially never equals the number of extracted items — the
+    prior implementation trusted alignment only when the counts happened to
+    match, which was 0/8 real orders (0/24 items). Matching on title content
+    instead works regardless of how many extra links share the page.
+
+    Returns one entry per item in `descriptions`, in the same order: the
+    matched link's ASIN, or `""` when no unused link's anchor text names
+    that item (the caller falls back to its own content-hash identity for
+    those). Each link is used for at most one item — a link is never
+    assigned to two items on positional coincidence or an ambiguous match,
+    and an unmatched link (promo, recommendation) is simply left unused.
+
+    Two passes, so an ambiguous case can't steal a link an unambiguous case
+    actually needs:
+      1. Exact match (byte-identical after normalization) is resolved first.
+      2. Prefix match (`_titles_match`) is resolved second, only among
+         items/links neither pass 1 nor an earlier pass-2 iteration used.
+
+    A link whose href doesn't parse to an ASIN (`_asin_from_href` returns
+    `""` — a non-product link the broad CSS selector still admitted, or a
+    product link Amazon rendered without the expected `/dp/`-shaped href) is
+    never treated as a match; matching continues to the next candidate link.
+    """
+    matched: list[str] = ["" for _ in descriptions]
+    used_links: set[int] = set()
+
+    def _assign(is_match: Callable[[str, str], bool]) -> None:
+        for item_idx, description in enumerate(descriptions):
+            if matched[item_idx]:
+                continue
+            for link_idx, (href, anchor_text) in enumerate(links):
+                if link_idx in used_links or not is_match(description, anchor_text):
+                    continue
+                asin = _asin_from_href(href)
+                if not asin:
+                    continue
+                matched[item_idx] = asin
+                used_links.add(link_idx)
+                break
+
+    _assign(lambda d, a: bool(d) and _normalize_title(d) == _normalize_title(a))
+    _assign(_titles_match)
+    return matched
 
 
 class LocalAsinReader:
     """Read-only Playwright client attached to a local Stagehand browser.
 
     Construct with the CDP port Stagehand's Chrome was launched with, call
-    `connect()` once per scrape session, then `read_current_page_asins()`
+    `connect()` once per scrape session, then `read_current_page_links()`
     per order-detail page. Always `close()` when done (even on failure) —
     it only tears down this client's connection, never the browser.
     """
@@ -149,8 +246,16 @@ class LocalAsinReader:
         await self.close()
         return False
 
-    async def read_current_page_asins(self) -> list[str]:
-        """ASINs of every product link on whatever page is currently open.
+    async def read_current_page_links(self) -> list[tuple[str, str]]:
+        """(href, anchor text) for every product link on the current page.
+
+        The href alone doesn't say WHICH extracted item a link belongs to —
+        the page can carry more product links than the order has line items
+        (recommendation widgets, "buy it again", a promo banner) — so the
+        anchor text comes along for `match_items_to_links` to compare
+        against each item's `description`. Anchor text is whitespace-
+        collapsed and stripped here so callers never have to re-normalize
+        raw DOM whitespace (nested `<span>`s, newlines) themselves.
 
         Returns `[]` on any failure rather than raising — a query error here
         must degrade an order to "no real ASINs" (the harvester then falls
@@ -164,12 +269,13 @@ class LocalAsinReader:
             page = self._current_page(browser)
             if page is None:
                 return []
-            hrefs = await page.eval_on_selector_all(
-                _PRODUCT_LINK_SELECTOR, "els => els.map(el => el.href)"
+            pairs = await page.eval_on_selector_all(
+                _PRODUCT_LINK_SELECTOR,
+                "els => els.map(el => [el.href, (el.textContent || '').trim()])",
             )
-            return parse_asins_from_hrefs(hrefs)
+            return [(href, " ".join(text.split())) for href, text in pairs]
         except Exception as exc:  # noqa: BLE001 - degrade, never raise into the harvester
-            logger.warning("Reading ASINs via Playwright/CDP failed: {}", exc)
+            logger.warning("Reading product links via Playwright/CDP failed: {}", exc)
             return []
 
     def _current_page(self, browser: Browser) -> Page | None:

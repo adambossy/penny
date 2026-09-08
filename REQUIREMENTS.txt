@@ -77,17 +77,25 @@ P5. Amazon itemization
     `extract` sees only an accessibility tree with no link targets, so it
     can never recover a product `href`, only node IDs. The LOCAL backend
     closes this gap by attaching a second, read-only Playwright client to
-    the same Chrome (over CDP) and reading product-link hrefs straight out
-    of the DOM; the Browserbase backend has no such capability and always
-    falls back to a synthetic identity. An item with no real ASIN — no
-    capability to read one, or Amazon genuinely shows none (digital goods,
-    gift wrap) — gets a synthetic identity derived from a hash of its own
-    content (description, price, quantity), not its position in the
-    extracted list: extraction order comes from an LLM and is not
-    guaranteed stable across re-scrapes, so a position-keyed identity risks
-    silently overwriting one item's row with another's data on a reordered
-    re-scrape, whereas a content-keyed one always maps the same item back
-    to the same row.
+    the same Chrome (over CDP) and reading every product link's `(href,
+    anchor text)` off the DOM; the Browserbase backend has no such
+    capability and always falls back to a synthetic identity. A DOM-read
+    link is attached to an extracted item by comparing the item's
+    `description` to the link's anchor text (case/whitespace-normalized,
+    tolerant of one being a truncated prefix of the other) — never by
+    position or by the count of links matching the count of items: a real
+    detail page mixes actual line-item links with unrelated ones
+    (recommendation widgets, "buy it again", promo banners), so those
+    counts essentially never agree, which made an earlier position/count-
+    based attempt find zero real ASINs across every order it was tried on.
+    An item with no real ASIN — no matching link, no capability to read
+    one, or Amazon genuinely shows none (digital goods, gift wrap) — gets a
+    synthetic identity derived from a hash of its own content (description,
+    price, quantity), not its position in the extracted list: extraction
+    order comes from an LLM and is not guaranteed stable across re-scrapes,
+    so a position-keyed identity risks silently overwriting one item's row
+    with another's data on a reordered re-scrape, whereas a content-keyed
+    one always maps the same item back to the same row.
 
     The LOCAL backend's browser is never run headless: Amazon's
     order-DETAIL page (unlike the list page) redirects a headless

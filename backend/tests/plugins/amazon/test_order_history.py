@@ -369,12 +369,13 @@ async def test_with_detail_collides_asin_less_items_with_identical_content() -> 
     assert asins[0] == asins[1]
 
 
-# --- OrderHarvester._with_detail: real ASINs from the Playwright reader ----
+# --- OrderHarvester._with_detail: real ASINs matched by DOM link content ---
 
 
-async def test_with_detail_uses_real_asins_when_counts_match() -> None:
+async def test_with_detail_matches_real_asins_by_description_not_position() -> None:
     # The whole point of the capability: a real ASIN from the DOM overrides
-    # whatever (unreliable) value the LLM extraction put in item.asin.
+    # whatever (unreliable) value the LLM extraction put in item.asin — and
+    # it does so by matching title content, not by list position/count.
     detail = ExtractedOrderDetail(
         items=[
             ExtractedDetailItem(
@@ -388,19 +389,23 @@ async def test_with_detail_uses_real_asins_when_counts_match() -> None:
     session = _FakeSession(extract_result=detail)
     harvester = OrderHarvester()
 
-    async def fake_asin_reader() -> list[str]:
-        return ["B0123456789", "B0987654321"]
+    async def fake_link_reader() -> list[tuple[str, str]]:
+        return [
+            ("https://www.amazon.com/dp/B012345678", "Widget"),
+            ("https://www.amazon.com/dp/B098765432", "Gadget"),
+        ]
 
-    harvester._asin_reader = fake_asin_reader
+    harvester._link_reader = fake_link_reader
     enriched = await harvester._with_detail(session, _bare_order())
 
-    assert [item.asin for item in enriched.items] == ["B0123456789", "B0987654321"]
+    assert [item.asin for item in enriched.items] == ["B012345678", "B098765432"]
 
 
-async def test_with_detail_ignores_real_asins_when_counts_mismatch() -> None:
-    # A DOM that yielded a different number of product links than the LLM
-    # extracted items means positional alignment can't be trusted — using it
-    # anyway risks writing a real ASIN onto the wrong item.
+async def test_with_detail_ignores_extra_unrelated_links_on_the_page() -> None:
+    # A real detail page mixes actual line-item links with unrelated ones
+    # (recommendations, "buy it again", promo banners) — the page having
+    # more product links than the order has items must not block matching
+    # the one that actually names this item.
     detail = ExtractedOrderDetail(
         items=[
             ExtractedDetailItem(
@@ -411,16 +416,43 @@ async def test_with_detail_ignores_real_asins_when_counts_mismatch() -> None:
     session = _FakeSession(extract_result=detail)
     harvester = OrderHarvester()
 
-    async def fake_asin_reader() -> list[str]:
-        return ["B0123456789", "B0987654321"]  # two links, one extracted item
+    async def fake_link_reader() -> list[tuple[str, str]]:
+        return [
+            ("https://www.amazon.com/dp/B012345678", "Widget"),
+            ("https://www.amazon.com/dp/B0DVBL912R", "Amazon Business Card"),
+            ("https://www.amazon.com/dp/B055555555", "Frequently bought together"),
+        ]
 
-    harvester._asin_reader = fake_asin_reader
+    harvester._link_reader = fake_link_reader
+    enriched = await harvester._with_detail(session, _bare_order())
+
+    assert enriched.items[0].asin == "B012345678"
+
+
+async def test_with_detail_leaves_asin_synthetic_when_no_link_names_the_item() -> None:
+    # The DOM has product links, but none of their anchor text names this
+    # item — a mismatch, not an alignment failure — so it keeps the
+    # content-hash fallback rather than guessing.
+    detail = ExtractedOrderDetail(
+        items=[
+            ExtractedDetailItem(
+                asin="", description="Widget", unitPriceCents=4700, quantity=1
+            ),
+        ]
+    )
+    session = _FakeSession(extract_result=detail)
+    harvester = OrderHarvester()
+
+    async def fake_link_reader() -> list[tuple[str, str]]:
+        return [("https://www.amazon.com/dp/B098765432", "Something unrelated")]
+
+    harvester._link_reader = fake_link_reader
     enriched = await harvester._with_detail(session, _bare_order())
 
     assert enriched.items[0].asin.startswith("NOASIN-")
 
 
-async def test_with_detail_falls_back_when_asin_reader_raises() -> None:
+async def test_with_detail_falls_back_when_link_reader_raises() -> None:
     detail = ExtractedOrderDetail(
         items=[
             ExtractedDetailItem(
@@ -431,10 +463,10 @@ async def test_with_detail_falls_back_when_asin_reader_raises() -> None:
     session = _FakeSession(extract_result=detail)
     harvester = OrderHarvester()
 
-    async def broken_asin_reader() -> list[str]:
+    async def broken_link_reader() -> list[tuple[str, str]]:
         raise RuntimeError("CDP connection dropped")
 
-    harvester._asin_reader = broken_asin_reader
+    harvester._link_reader = broken_link_reader
     enriched = await harvester._with_detail(session, _bare_order())
 
     assert enriched.items[0].asin.startswith("NOASIN-")
@@ -444,7 +476,7 @@ async def test_with_detail_leaves_llm_asin_untouched_when_no_reader_configured()
     None
 ):
     # Backends without the capability (Browserbase, or a failed local
-    # attach) pass asin_reader=None to harvest(); _with_detail must behave
+    # attach) pass link_reader=None to harvest(); _with_detail must behave
     # exactly as it did before this capability existed.
     detail = ExtractedOrderDetail(
         items=[
@@ -461,13 +493,13 @@ async def test_with_detail_leaves_llm_asin_untouched_when_no_reader_configured()
     assert enriched.items[0].asin == "B0123456789"
 
 
-async def test_harvest_threads_asin_reader_into_with_detail(monkeypatch: Any) -> None:
-    """`harvest()` is the only place `asin_reader` is normally set; pin the wiring."""
+async def test_harvest_threads_link_reader_into_with_detail(monkeypatch: Any) -> None:
+    """`harvest()` is the only place `link_reader` is normally set; pin the wiring."""
     harvester = OrderHarvester()
     captured: list[Any] = []
 
     async def fake_with_detail(session: Any, order: ScrapedOrder) -> ScrapedOrder:
-        captured.append(harvester._asin_reader)
+        captured.append(harvester._link_reader)
         return order
 
     monkeypatch.setattr(harvester, "_with_detail", fake_with_detail)
@@ -486,11 +518,11 @@ async def test_harvest_threads_asin_reader_into_with_detail(monkeypatch: Any) ->
 
     monkeypatch.setattr(harvester, "_extract_page", fake_extract_page)
 
-    async def reader() -> list[str]:
+    async def reader() -> list[tuple[str, str]]:
         return []
 
     await harvester.harvest(
-        _FakeSession(), since=None, until=None, max_orders=None, asin_reader=reader
+        _FakeSession(), since=None, until=None, max_orders=None, link_reader=reader
     )
 
     assert captured == [reader]

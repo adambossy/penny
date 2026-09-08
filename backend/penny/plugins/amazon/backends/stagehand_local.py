@@ -217,8 +217,8 @@ class StagehandLocalBackend:
                 until=until,
                 max_orders=max_orders,
                 fetch_item_details=fetch_item_details,
-                asin_reader=(
-                    asin_reader.read_current_page_asins
+                link_reader=(
+                    asin_reader.read_current_page_links
                     if asin_reader_attached
                     else None
                 ),

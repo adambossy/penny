@@ -18,6 +18,7 @@ import pytest
 from penny.plugins.amazon.backends.dom_asin_reader import (
     LocalAsinReader,
     free_local_port,
+    match_items_to_links,
     parse_asins_from_hrefs,
 )
 
@@ -91,6 +92,111 @@ def test_free_local_port_returns_a_usable_port_number() -> None:
     assert 0 < port < 65536
 
 
+# --- match_items_to_links: content matching, not positional alignment ------
+#
+# Ground truth (verified live against a real order, see the branch's task
+# brief): a real detail page mixes actual line-item links with unrelated
+# ones, so counts never line up — matching has to go by title content.
+
+_BINDER_HREF = "https://www.amazon.com/dp/B00006IEM6/ref=od_ep"
+_BINDER_TITLE = 'Avery Showcase 3 Ring Binder, 1.5" Slant Rings, 1 White Binder'
+_BIB_HREF = "https://www.amazon.com/dp/B0FN4WCVBL/ref=od_ep"
+_BIB_TITLE = "BebeBiu Long Sleeve Baby Bib, Waterproof Fabric, Full Coverage"
+_PROMO_HREF = "https://www.amazon.com/dp/B0DVBL912R/ref=promo"
+_PROMO_TITLE = "Amazon Business Card"
+
+
+def test_match_items_to_links_matches_on_exact_title() -> None:
+    matched = match_items_to_links(
+        [_BINDER_TITLE, _BIB_TITLE],
+        [(_BINDER_HREF, _BINDER_TITLE), (_BIB_HREF, _BIB_TITLE)],
+    )
+    assert matched == ["B00006IEM6", "B0FN4WCVBL"]
+
+
+def test_match_items_to_links_ignores_case_and_whitespace_differences() -> None:
+    matched = match_items_to_links(
+        ['  avery showcase 3 ring   binder, 1.5" slant rings, 1 white binder  '],
+        [(_BINDER_HREF, _BINDER_TITLE)],
+    )
+    assert matched == ["B00006IEM6"]
+
+
+def test_match_items_to_links_matches_a_truncated_llm_description_as_a_prefix() -> None:
+    # The LLM's description is sometimes a truncated prefix of the full title.
+    truncated = 'Avery Showcase 3 Ring Binder, 1.5" Slant Rings'
+    matched = match_items_to_links([truncated], [(_BINDER_HREF, _BINDER_TITLE)])
+    assert matched == ["B00006IEM6"]
+
+
+def test_match_items_to_links_matches_when_the_anchor_text_is_the_shorter_one() -> None:
+    # Less common, but the truncation could in principle run the other way.
+    truncated_anchor = _BINDER_TITLE[:20]
+    matched = match_items_to_links([_BINDER_TITLE], [(_BINDER_HREF, truncated_anchor)])
+    assert matched == ["B00006IEM6"]
+
+
+def test_match_items_to_links_rejects_a_short_generic_prefix() -> None:
+    # A short, generic description must not spuriously prefix-match an
+    # unrelated link just because it happens to be a textual prefix.
+    matched = match_items_to_links(["Binder"], [(_BINDER_HREF, _BINDER_TITLE)])
+    assert matched == [""]
+
+
+def test_match_items_to_links_leaves_an_unmatched_item_blank() -> None:
+    matched = match_items_to_links(
+        [_BINDER_TITLE, "Some item with no matching link at all here"],
+        [(_BINDER_HREF, _BINDER_TITLE)],
+    )
+    assert matched == ["B00006IEM6", ""]
+
+
+def test_match_items_to_links_ignores_an_unmatched_promo_link() -> None:
+    # The 19th link on the real test order's detail page (a "Get the Amazon
+    # Business Card" promo) matches no line item and must not be forced onto
+    # one just because it's on the page.
+    matched = match_items_to_links(
+        [_BINDER_TITLE],
+        [(_PROMO_HREF, _PROMO_TITLE), (_BINDER_HREF, _BINDER_TITLE)],
+    )
+    assert matched == ["B00006IEM6"]
+
+
+def test_match_items_to_links_never_assigns_one_link_to_two_items() -> None:
+    # Two items with byte-identical descriptions but only one candidate link:
+    # the link is consumed by the first match, the second item is left blank
+    # rather than the same ASIN being duplicated onto both.
+    matched = match_items_to_links(
+        [_BINDER_TITLE, _BINDER_TITLE], [(_BINDER_HREF, _BINDER_TITLE)]
+    )
+    assert matched == ["B00006IEM6", ""]
+
+
+def test_match_items_to_links_skips_a_link_whose_href_has_no_asin() -> None:
+    # A title-matching link that isn't shaped like a product href (broad CSS
+    # selector let it through, but it's not `/dp/<ASIN>` or
+    # `/gp/product/<ASIN>`) contributes no ASIN; matching keeps looking.
+    unparseable_href = "https://www.amazon.com/dp//ref=od_ep"
+    matched = match_items_to_links(
+        [_BINDER_TITLE],
+        [(unparseable_href, _BINDER_TITLE), (_BINDER_HREF, _BINDER_TITLE)],
+    )
+    assert matched == ["B00006IEM6"]
+
+
+def test_match_items_to_links_with_no_links_at_all() -> None:
+    assert match_items_to_links([_BINDER_TITLE], []) == [""]
+
+
+def test_match_items_to_links_with_no_items_at_all() -> None:
+    assert match_items_to_links([], [(_BINDER_HREF, _BINDER_TITLE)]) == []
+
+
+def test_match_items_to_links_treats_a_blank_description_as_unmatchable() -> None:
+    matched = match_items_to_links(["", _BIB_TITLE], [(_BIB_HREF, _BIB_TITLE)])
+    assert matched == ["", "B0FN4WCVBL"]
+
+
 # --- Offline end-to-end proof: attach over CDP, read the DOM, disconnect ---
 #
 # Simulates production exactly: an "owner" browser launched the way
@@ -160,8 +266,16 @@ async def test_local_asin_reader_reads_real_asins_from_a_live_chromium_dom(
         attached = await reader.connect()
         assert attached, "LocalAsinReader failed to attach to the owner browser"
 
-        asins = await reader.read_current_page_asins()
-        assert asins == ["B00X4WHP5E", "B01ABCDEF2"]
+        links = await reader.read_current_page_links()
+        assert [text for _, text in links] == [
+            "A Gadget",
+            "A Widget",
+            "A Widget (image link)",
+        ]
+        assert parse_asins_from_hrefs([href for href, _ in links]) == [
+            "B00X4WHP5E",
+            "B01ABCDEF2",
+        ]
 
         await reader.close()
 
