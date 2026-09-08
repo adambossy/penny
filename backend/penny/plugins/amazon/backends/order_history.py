@@ -24,15 +24,16 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 
+from penny.plugins.amazon.backends.dom_asin_reader import match_items_to_links
 from penny.plugins.amazon.scraper import ScrapedItem, ScrapedOrder
 
-# A no-argument async callable that reads the real ASINs off whatever page a
-# session currently has open (see backends/dom_asin_reader.py). ``None``
-# means "no real-ASIN capability this run" — the local backend supplies one
-# when it can attach Playwright over CDP; every other backend passes
-# ``None`` and the synthetic item identity below is used unconditionally,
-# same as before this capability existed.
-AsinReader = Callable[[], Awaitable[list[str]]]
+# A no-argument async callable that reads (href, anchor text) pairs for every
+# product link off whatever page a session currently has open (see
+# backends/dom_asin_reader.py). ``None`` means "no real-ASIN capability this
+# run" — the local backend supplies one when it can attach Playwright over
+# CDP; every other backend passes ``None`` and the synthetic item identity
+# below is used unconditionally, same as before this capability existed.
+LinkReader = Callable[[], Awaitable[list[tuple[str, str]]]]
 
 ORDERS_URL = "https://www.amazon.com/your-orders/orders"
 DETAIL_URL_BASE = "https://www.amazon.com/gp/your-account/order-details"
@@ -390,7 +391,7 @@ class OrderHarvester:
 
     def __init__(self) -> None:
         self.orders: list[ScrapedOrder] = []
-        self._asin_reader: AsinReader | None = None
+        self._link_reader: LinkReader | None = None
 
     async def harvest(
         self,
@@ -400,7 +401,7 @@ class OrderHarvester:
         until: date | None,
         max_orders: int | None,
         fetch_item_details: bool = True,
-        asin_reader: AsinReader | None = None,
+        link_reader: LinkReader | None = None,
     ) -> list[ScrapedOrder]:
         """Walk every year in the window and return the orders found.
 
@@ -411,14 +412,14 @@ class OrderHarvester:
                 order-level tax/shipping — the list page never carries them.
                 ``max_orders`` still bounds how many orders (and therefore
                 how many detail fetches) this performs.
-            asin_reader: Optional capability to read real ASINs off the
-                current page via Playwright/CDP (see
-                ``backends/dom_asin_reader.py``). ``None`` (the default —
-                every backend but the local one) means real ASINs are
-                unavailable and every ASIN-less item gets the synthetic
-                content-hash identity instead.
+            link_reader: Optional capability to read (href, anchor text)
+                pairs for every product link off the current page via
+                Playwright/CDP (see ``backends/dom_asin_reader.py``).
+                ``None`` (the default — every backend but the local one)
+                means real ASINs are unavailable and every item gets the
+                synthetic content-hash identity instead.
         """
-        self._asin_reader = asin_reader
+        self._link_reader = link_reader
         year_filters = years_for_window(
             since=since, until=until, max_orders=max_orders, today=date.today()
         )
@@ -566,26 +567,25 @@ class OrderHarvester:
             )
             return order
 
-        real_asins = await self._read_real_asins()
-        # Only trust positional alignment between the DOM-read ASINs and the
-        # LLM-extracted items when the counts agree — a mismatch means either
-        # the DOM has non-item product links (e.g. a "buy again" widget) or
-        # the extraction miscounted, and guessing at alignment risks writing
-        # a real ASIN onto the wrong item, which is worse than no ASIN.
-        matched_asins = real_asins if len(real_asins) == len(detail.items) else None
-        if real_asins and matched_asins is None:
-            logger.warning(
-                "Order {}: {} product links but {} extracted items; skipping "
-                "real-ASIN matching (counts must agree to trust alignment)",
+        real_links = await self._read_real_links()
+        matched_asins = match_items_to_links(
+            [item.description for item in detail.items], real_links
+        )
+        if real_links:
+            matched_count = sum(1 for asin in matched_asins if asin)
+            logger.info(
+                "Order {}: matched {}/{} extracted items to a real ASIN via DOM "
+                "link content ({} candidate product links on the page)",
                 order.order_id,
-                len(real_asins),
+                matched_count,
                 len(detail.items),
+                len(real_links),
             )
 
         items = [
             ScrapedItem(
                 asin=_item_identity(
-                    (matched_asins[idx] if matched_asins else "") or item.asin,
+                    matched_asins[idx] or item.asin,
                     item.description,
                     item.unit_price_cents,
                     item.quantity,
@@ -604,18 +604,18 @@ class OrderHarvester:
             }
         )
 
-    async def _read_real_asins(self) -> list[str]:
-        """Real ASINs off the currently-open page, or ``[]`` if unavailable.
+    async def _read_real_links(self) -> list[tuple[str, str]]:
+        """(href, anchor text) pairs off the currently-open page, or ``[]``.
 
-        Never raises: a broken ``asin_reader`` must degrade this order to
+        Never raises: a broken ``link_reader`` must degrade this order to
         "no real ASINs" rather than sink the detail fetch already underway.
         """
-        if self._asin_reader is None:
+        if self._link_reader is None:
             return []
         try:
-            return await self._asin_reader()
+            return await self._link_reader()
         except Exception as exc:
-            logger.warning("asin_reader failed; continuing without real ASINs: {}", exc)
+            logger.warning("link_reader failed; continuing without real ASINs: {}", exc)
             return []
 
     async def _extract_detail(self, session: Any) -> ExtractedOrderDetail:
