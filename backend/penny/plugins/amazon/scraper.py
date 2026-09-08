@@ -65,7 +65,7 @@ def _get_backend(
     backend: BackendType,
     *,
     context_id: str | None = None,
-    login_mode: bool = False,
+    profile_key: str | None = None,
 ) -> AmazonScraperBackend:
     """Get the backend instance for the specified type.
 
@@ -73,8 +73,8 @@ def _get_backend(
         backend: Backend type to use.
         context_id: Optional Browserbase context ID for session persistence.
             Only applicable for "stagehand-browserbase" backend.
-        login_mode: If True, wait for manual login via Session Live View.
-            Only applicable for "stagehand-browserbase" backend.
+        profile_key: Login profile this backend serves. The local Stagehand
+            backend keys its persistent Chrome user-data directory off it.
 
     Returns:
         Backend instance implementing AmazonScraperBackend protocol.
@@ -83,10 +83,9 @@ def _get_backend(
         ValueError: If backend type is not supported.
     """
     logger.info(
-        "Selecting Amazon scraper backend: backend={} context_id_set={} login_mode={}",
+        "Selecting Amazon scraper backend: backend={} context_id_set={}",
         backend,
         context_id is not None,
-        login_mode,
     )
     if backend == "playwriter":
         from penny.plugins.amazon.backends.playwriter import PlaywriterBackend
@@ -97,13 +96,13 @@ def _get_backend(
             StagehandLocalBackend,
         )
 
-        return StagehandLocalBackend()
+        return StagehandLocalBackend(profile_key=profile_key)
     elif backend == "stagehand-browserbase":
         from penny.plugins.amazon.backends.stagehand_browserbase import (
             StagehandBrowserbaseBackend,
         )
 
-        return StagehandBrowserbaseBackend(context_id=context_id, login_mode=login_mode)
+        return StagehandBrowserbaseBackend(context_id=context_id)
     else:
         raise ValueError(f"Unsupported backend: {backend}")
 
@@ -156,12 +155,15 @@ def _ensure_auth(
 ) -> AmazonLoginProfileDB:
     """Ensure a profile is authenticated, creating a context and logging in if needed.
 
-    Uses an optimistic strategy: if a context_id already exists and the last auth
-    was successful, treat the profile as ready without launching a new browser
-    session. This avoids an extra browser spin-up just for checking.
+    Only Browserbase needs this phase: its auth lives in a server-side context
+    that must exist before a session can attach to it. Every other backend owns
+    its session state and signs in from within the scrape, so it is passed
+    through untouched.
 
-    If no context_id exists, creates one via the backend, runs an interactive
-    login flow, and persists the new context_id to the DB.
+    For Browserbase the strategy is optimistic: if a context_id already exists,
+    treat the profile as ready without launching a browser just to check. If no
+    context_id exists, create one, run an interactive login flow, and persist
+    the new context_id to the DB.
 
     Args:
         db: Database facade.
@@ -174,49 +176,44 @@ def _ensure_auth(
     Raises:
         Exception: If context creation or login fails.
     """
+    log = logger.bind(profile_key=profile.profile_key)
+
+    if backend != "stagehand-browserbase":
+        # Only Browserbase keeps auth in a server-side context that has to
+        # exist before a scrape. The other backends carry their own session
+        # state (the local one, a per-profile Chrome user-data directory) and
+        # drive any interactive sign-in from inside the scrape itself.
+        log.info("Backend {} manages its own session; no auth phase", backend)
+        return profile
+
     if profile.browserbase_context_id is not None:
         # Optimistic: treat existing context as valid. If the session is
         # actually expired, the scrape phase will surface the error.
-        logger.bind(profile_key=profile.profile_key).info(
-            "Profile has existing context_id; treating as ready (optimistic)"
-        )
+        log.info("Profile has existing context_id; treating as ready (optimistic)")
         return profile
 
     # No context yet — create one and run interactive login.
-    logger.bind(profile_key=profile.profile_key).info(
+    log.info(
         "No context found; creating new Browserbase context and starting login flow"
     )
 
-    if backend == "stagehand-browserbase":
-        from penny.plugins.amazon.backends.stagehand_browserbase import (
-            StagehandBrowserbaseBackend,
-        )
+    from penny.plugins.amazon.backends.stagehand_browserbase import (
+        StagehandBrowserbaseBackend,
+    )
 
-        context_id = StagehandBrowserbaseBackend.create_context()
-        profile = db.set_amazon_login_context_id(
-            profile_key=profile.profile_key, context_id=context_id
-        )
-        logger.bind(profile_key=profile.profile_key).info(
-            "Created and persisted Browserbase context_id"
-        )
-    else:
-        # Non-Browserbase backends do not use persistent contexts.
-        logger.bind(profile_key=profile.profile_key).info(
-            "Backend {} does not use persistent contexts; skipping context creation",
-            backend,
-        )
-        context_id = None
+    context_id = StagehandBrowserbaseBackend.create_context()
+    profile = db.set_amazon_login_context_id(
+        profile_key=profile.profile_key, context_id=context_id
+    )
+    log.info("Created and persisted Browserbase context_id")
 
-    # Run login-mode scrape so the user can authenticate via Session Live View.
-    backend_instance = _get_backend(backend, context_id=context_id, login_mode=True)
-    backend_instance.scrape_order_history(since=None, until=None, max_orders=0)
+    # Park on the sign-in page so the user can authenticate via Live View.
+    StagehandBrowserbaseBackend(context_id=context_id, login_mode=True).login()
 
     db.record_amazon_login_auth_result(
         profile_key=profile.profile_key, status="success"
     )
-    logger.bind(profile_key=profile.profile_key).info(
-        "Login flow completed; profile is now ready"
-    )
+    log.info("Login flow completed; profile is now ready")
     return profile
 
 
@@ -228,6 +225,7 @@ def _scrape_one_profile(
     since: date | None,
     until: date | None,
     is_unbounded_request: bool,
+    fetch_item_details: bool,
 ) -> dict[str, Any]:
     """Run a scrape for a single profile and persist results.
 
@@ -244,6 +242,8 @@ def _scrape_one_profile(
             ``since``/``until``/``max_orders`` constraints. Only an unbounded
             request that returns successfully advances the profile's
             ``history_complete_through`` watermark.
+        fetch_item_details: Whether to fetch each order's detail page for
+            real per-item price/ASIN/quantity and order-level tax/shipping.
 
     Returns:
         Per-profile result dict conforming to the result contract.
@@ -267,11 +267,14 @@ def _scrape_one_profile(
     backend_instance = _get_backend(
         backend,
         context_id=profile.browserbase_context_id,
-        login_mode=False,
+        profile_key=profile.profile_key,
     )
     try:
         orders = backend_instance.scrape_order_history(
-            since=final_since, until=until, max_orders=max_orders
+            since=final_since,
+            until=until,
+            max_orders=max_orders,
+            fetch_item_details=fetch_item_details,
         )
     except Exception as exc:
         # Why: Browserbase sessions can die mid-scrape (timeouts, target loss);
@@ -336,6 +339,7 @@ def _scrape_profile_with_retry(
     since: date | None,
     until: date | None,
     is_unbounded_request: bool,
+    fetch_item_details: bool,
 ) -> dict[str, Any]:
     """Scrape a single profile. Persists partial results on failure.
 
@@ -346,7 +350,14 @@ def _scrape_profile_with_retry(
     log = logger.bind(profile_key=profile.profile_key)
     try:
         return _scrape_one_profile(
-            db, profile, backend, max_orders, since, until, is_unbounded_request
+            db,
+            profile,
+            backend,
+            max_orders,
+            since,
+            until,
+            is_unbounded_request,
+            fetch_item_details,
         )
     except Exception as exc:
         log.error("Scrape failed: {}", exc)
@@ -368,6 +379,7 @@ def _run_parallel_scrape(
     since: date | None,
     until: date | None,
     is_unbounded_request: bool,
+    fetch_item_details: bool,
 ) -> list[dict[str, Any]]:
     """Run scraping for all ready profiles, one at a time on the main thread.
 
@@ -382,7 +394,14 @@ def _run_parallel_scrape(
     """
     return [
         _scrape_profile_with_retry(
-            db, profile, backend, max_orders, since, until, is_unbounded_request
+            db,
+            profile,
+            backend,
+            max_orders,
+            since,
+            until,
+            is_unbounded_request,
+            fetch_item_details,
         )
         for profile in ready_profiles
     ]
@@ -462,6 +481,7 @@ def scrape_amazon_orders(
     until: date | None = None,
     max_orders: int | None = None,
     profile_key: str | None = None,
+    fetch_item_details: bool = True,
 ) -> dict[str, Any]:
     """Scrape Amazon order history for all enabled login profiles.
 
@@ -488,6 +508,15 @@ def scrape_amazon_orders(
         max_orders: Optional maximum number of orders to scrape per profile.
         profile_key: If set, scrape only the profile with this key (must be
             enabled). When ``None``, scrape all enabled profiles.
+        fetch_item_details: Whether to fetch each order's detail page for
+            real per-item price/ASIN/quantity and order-level tax/shipping
+            (P5). Defaults to on: the order-history list page never carries
+            this data, so leaving it off means every item is a zero-priced
+            placeholder and itemization degrades to an equal-cents split.
+            Costs one extra navigation + LLM extraction per order — on a
+            per-minute-billed Browserbase session, set it to ``False`` for a
+            cheap/fast bulk backfill and re-run to itemize the important
+            months. ``max_orders`` bounds the cost either way.
 
     Returns:
         Dictionary with top-level status and per-profile breakdown conforming
@@ -518,12 +547,13 @@ def scrape_amazon_orders(
 
     logger.info(
         "Starting Amazon scrape: backend={} profiles={} since={} until={} "
-        "max_orders={}",
+        "max_orders={} fetch_item_details={}",
         backend,
         len(profiles),
         effective_since,
         until,
         max_orders,
+        fetch_item_details,
     )
 
     # Sequential auth phase
@@ -563,6 +593,7 @@ def scrape_amazon_orders(
         effective_since,
         until,
         is_unbounded_request,
+        fetch_item_details,
     )
 
     return _aggregate_results(len(profiles), len(ready_profiles), profile_results)

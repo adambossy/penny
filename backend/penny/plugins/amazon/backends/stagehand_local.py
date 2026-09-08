@@ -1,4 +1,15 @@
-"""Stagehand LOCAL backend for Amazon order scraping."""
+"""Stagehand LOCAL backend for Amazon order scraping.
+
+Drives Stagehand's local server — a Node binary packaged inside the
+``stagehand`` wheel — against a real Chrome on this machine, so no
+Browserbase account or per-minute session cost is involved.
+
+Where the Browserbase backend persists login state in a remote *context*,
+this backend persists it in a Chrome user-data directory under the
+workspace (one per login profile). The interactive Amazon sign-in is
+therefore a one-time cost per profile: later runs reuse the cookies on
+disk and go straight to extraction.
+"""
 
 from __future__ import annotations
 
@@ -6,60 +17,72 @@ import asyncio
 from datetime import date
 import importlib
 import os
-from typing import Any
+from pathlib import Path
+import re
 
-from pydantic import BaseModel, Field
+from loguru import logger
 
-from penny.plugins.amazon.backends.stagehand_browserbase import (
-    PageOutcome,
-    _page_url,
-    _years_for_window,
+from penny.plugins.amazon.backends.dom_asin_reader import (
+    LocalAsinReader,
+    free_local_port,
 )
-from penny.plugins.amazon.scraper import ScrapedItem, ScrapedOrder
+from penny.plugins.amazon.backends.order_history import (
+    ORDERS_URL,
+    OrderHarvester,
+    is_signed_out,
+    navigate,
+    wait_for_sign_in,
+)
+from penny.plugins.amazon.scraper import ScrapedOrder
+from penny.workspace import resolve_workspace_dir
+
+# Amazon's order-DETAIL page (unlike the list page) rejects a headless
+# session outright: a headless navigation to it redirects to /ap/signin
+# demanding a fresh login (openid.pape.max_auth_age=3600), even against a
+# profile whose saved session loads that exact page fine when run headed
+# two minutes later. Since detail-page itemization is the entire point of
+# this backend (P5), headless is not a caller-settable option here — it is
+# a hardcoded property of the backend, not a default that can be flipped by
+# a future caller. See AGENTS.md / REQUIREMENTS.txt P5 for the same note.
+_HEADLESS = False
+
+# How long to leave the visible browser open for a human to sign in, and how
+# often to ask the page whether they're done. Signing in is a one-time cost
+# per profile (the user-data dir keeps the session), so the poll is cheap in
+# aggregate even though each check is an LLM call.
+_LOGIN_TIMEOUT_SECONDS = 300
+_LOGIN_POLL_SECONDS = 5
+
+# First run pays for unpacking the packaged server binary before it listens.
+_SERVER_READY_TIMEOUT_SECONDS = 90.0
 
 
-class ExtractedItem(BaseModel):
-    """Schema for extracting a single item from Amazon order."""
+def profile_data_dir(profile_key: str | None) -> Path:
+    """Chrome user-data directory for ``profile_key``.
 
-    asin: str = Field(..., description="Amazon Standard Identification Number")
-    description: str = Field(..., description="Item name/description")
-    price_cents: int = Field(..., description="Price in cents (e.g., $49.77 = 4977)")
-    quantity: int = Field(default=1, description="Quantity ordered")
-
-
-class ExtractedOrder(BaseModel):
-    """Schema for extracting a single Amazon order."""
-
-    order_id: str = Field(..., description="Order ID (e.g., 113-5524816-2451403)")
-    order_date: str = Field(..., description="Order date in YYYY-MM-DD format")
-    order_total_cents: int = Field(..., description="Total in cents")
-    tax_cents: int = Field(default=0, description="Tax amount in cents")
-    shipping_cents: int = Field(default=0, description="Shipping in cents")
-    items: list[ExtractedItem] = Field(default_factory=list, description="Order items")
-
-
-class ExtractedOrders(BaseModel):
-    """Schema for extracting multiple orders from a page."""
-
-    orders: list[ExtractedOrder] = Field(
-        default_factory=list, description="List of orders on current page"
-    )
-    has_next_page: bool = Field(
-        default=False, description="Whether there are more orders"
-    )
+    One directory per Amazon login profile, under the workspace, so two
+    Amazon accounts never share cookies. ``None`` (no profile in play) gets
+    a ``default`` directory.
+    """
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", profile_key or "default").strip("_")
+    return resolve_workspace_dir() / "browser" / "amazon" / (slug or "default")
 
 
 class StagehandLocalBackend:
-    """Amazon scraper backend using Stagehand LOCAL mode.
+    """Amazon scraper backend using Stagehand's LOCAL server.
 
-    This backend uses Stagehand with local Playwright to scrape Amazon
-    order history. The browser will be visible for user authentication.
+    The browser is always visible (see ``_HEADLESS``): the first scrape for
+    a profile stops on Amazon's sign-in page and waits for the user to
+    authenticate, after which the session is kept in
+    ``profile_data_dir(profile_key)``.
     """
 
     def __init__(
         self,
         model_name: str = "google/gemini-2.5-flash",
         model_api_key: str | None = None,
+        *,
+        profile_key: str | None = None,
     ) -> None:
         """Initialize the Stagehand LOCAL backend.
 
@@ -67,12 +90,24 @@ class StagehandLocalBackend:
             model_name: LLM model for Stagehand. Defaults to Gemini Flash.
             model_api_key: API key for the model. If None, reads from
                 MODEL_API_KEY or GOOGLE_API_KEY environment variable.
+            profile_key: Amazon login profile this scrape belongs to; selects
+                the Chrome user-data directory holding its session.
+
+        There is deliberately no ``headless`` parameter: see the module-level
+        ``_HEADLESS`` constant for why headless is a hardcoded property of
+        this backend rather than something a caller can set.
         """
         self._model_name = model_name
         self._model_api_key = model_api_key or os.getenv(
             "MODEL_API_KEY", os.getenv("GOOGLE_API_KEY", "")
         )
-        self._collected_orders: list[ScrapedOrder] = []
+        self._user_data_dir = profile_data_dir(profile_key)
+        self._harvester = OrderHarvester()
+
+    @property
+    def collected_orders(self) -> list[ScrapedOrder]:
+        """Orders collected so far (used for partial recovery on failure)."""
+        return self._harvester.orders
 
     def scrape_order_history(
         self,
@@ -80,40 +115,40 @@ class StagehandLocalBackend:
         since: date | None = None,
         until: date | None = None,
         max_orders: int | None = None,
+        fetch_item_details: bool = True,
     ) -> list[ScrapedOrder]:
-        """Scrape Amazon order history via Stagehand LOCAL mode.
+        """Scrape Amazon order history via Stagehand's local server.
 
         Args:
             since: Inclusive lower bound on ``order_date``.
             until: Inclusive upper bound on ``order_date``.
             max_orders: Optional maximum orders across all visited years.
+            fetch_item_details: Whether to fetch each order's detail page for
+                real per-item data (see ``AmazonScraperBackend``).
 
         Returns:
             List of ScrapedOrder objects.
         """
-        try:
-            loop = asyncio.get_running_loop()
-            nest_asyncio_module = importlib.import_module("nest_asyncio")
-            apply = getattr(nest_asyncio_module, "apply", None)
-            if callable(apply):
-                apply()
-            return loop.run_until_complete(
-                self._scrape_order_history_async(
-                    since=since, until=until, max_orders=max_orders
-                )
+        logger.info(
+            "Local scrape_order_history start: since={} until={} max_orders={} "
+            "fetch_item_details={} user_data_dir={}",
+            since,
+            until,
+            max_orders,
+            fetch_item_details,
+            self._user_data_dir,
+        )
+        # Callers reach the backends off the event loop (the @tool wrappers use
+        # asyncio.to_thread), so owning the loop here keeps the async plumbing
+        # to a single well-defined entry point.
+        return asyncio.run(
+            self._scrape_order_history_async(
+                since=since,
+                until=until,
+                max_orders=max_orders,
+                fetch_item_details=fetch_item_details,
             )
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(loop)
-                return loop.run_until_complete(
-                    self._scrape_order_history_async(
-                        since=since, until=until, max_orders=max_orders
-                    )
-                )
-            finally:
-                asyncio.set_event_loop(None)
-                loop.close()
+        )
 
     async def _scrape_order_history_async(
         self,
@@ -121,6 +156,7 @@ class StagehandLocalBackend:
         since: date | None,
         until: date | None,
         max_orders: int | None,
+        fetch_item_details: bool,
     ) -> list[ScrapedOrder]:
         """Async implementation of order history scraping."""
         try:
@@ -129,195 +165,93 @@ class StagehandLocalBackend:
             raise ImportError(
                 "Stagehand is not installed. Install with: pip install stagehand"
             ) from e
-        stagehand_class = stagehand_module.Stagehand
-        stagehand_config_class = stagehand_module.StagehandConfig
 
-        print(f"[Stagehand] Initializing with model: {self._model_name}")
-        print(f"[Stagehand] API key configured: {bool(self._model_api_key)}")
+        if not self._model_api_key:
+            raise ValueError(
+                "MODEL_API_KEY (or GOOGLE_API_KEY) is required for the local "
+                "Stagehand backend"
+            )
 
-        config = stagehand_config_class(
-            env="LOCAL",
-            model_name=self._model_name,
+        # The local server writes Chrome's stdio logs into the user-data dir
+        # and does not create it, so an absent directory fails session start.
+        self._user_data_dir.mkdir(parents=True, exist_ok=True)
+
+        # A fixed, known CDP port lets LocalAsinReader attach a second,
+        # read-only Playwright client to this same Chrome afterward — see
+        # dom_asin_reader.py. Chosen fresh per scrape (not hardcoded) so
+        # nothing here can collide with another local dev server.
+        cdp_port = free_local_port()
+
+        client = stagehand_module.AsyncStagehand(
+            server="local",
             model_api_key=self._model_api_key,
-            headless=False,  # Show browser for authentication
+            local_headless=_HEADLESS,
+            local_ready_timeout_s=_SERVER_READY_TIMEOUT_SECONDS,
         )
+        logger.info("Starting local Stagehand session (model={})", self._model_name)
+        session = await client.sessions.start(
+            model_name=self._model_name,
+            browser={
+                "type": "local",
+                "launch_options": {
+                    "headless": _HEADLESS,
+                    "user_data_dir": str(self._user_data_dir),
+                    "preserve_user_data_dir": True,
+                    "port": cdp_port,
+                },
+            },
+        )
+        logger.info("Local Stagehand session started: {}", session.id)
 
-        stagehand = stagehand_class(config)
-        print("[Stagehand] Config created, initializing browser...")
-        await stagehand.init()
-        print("[Stagehand] Browser initialized successfully")
+        # Best-effort: a failed attach just means no real-ASIN capability
+        # this run (LocalAsinReader.connect() logs why and returns False),
+        # never a reason to abort the scrape.
+        asin_reader = LocalAsinReader(cdp_port)
+        asin_reader_attached = await asin_reader.connect()
 
         try:
-            base_url = "https://www.amazon.com/your-orders/orders"
-            await stagehand.page.goto(base_url, timeout=60000)
-
-            # Wait for user to authenticate if needed
-            page = stagehand.page
-            max_wait_seconds = 300  # 5 minutes to log in
-
-            for _ in range(max_wait_seconds):
-                current_url = page.url
-                if "your-orders" in current_url and "signin" not in current_url:
-                    print(f"[Stagehand] Detected orders page: {current_url}")
-                    break
-                await asyncio.sleep(1)
-            else:
-                raise TimeoutError(
-                    "Timed out waiting for Amazon login. "
-                    "Please log in within 5 minutes."
-                )
-
-            year_filters = _years_for_window(
+            await self._ensure_signed_in(session)
+            return await self._harvester.harvest(
+                session,
                 since=since,
                 until=until,
                 max_orders=max_orders,
-                today=date.today(),
+                fetch_item_details=fetch_item_details,
+                asin_reader=(
+                    asin_reader.read_current_page_asins
+                    if asin_reader_attached
+                    else None
+                ),
             )
-            print(
-                f"[Stagehand] Year filters resolved: {year_filters} "
-                f"(since={since} until={until})"
-            )
-
-            self._collected_orders = []
-
-            for year_filter in year_filters:
-                if year_filter is not None:
-                    year_url = _page_url(base_url, year_filter, page_num=1)
-                    await stagehand.page.goto(year_url, timeout=60000)
-
-                print("[Stagehand] Waiting 2 seconds for page to fully load...")
-                await asyncio.sleep(2)
-                print("[Stagehand] Starting extraction loop...")
-
-                outcome = await self._extract_pages_in_current_view(
-                    stagehand,
-                    base_url=base_url,
-                    since=since,
-                    until=until,
-                    max_orders=max_orders,
-                    year_filter=year_filter,
-                )
-                if outcome == "limit_hit":
-                    return self._collected_orders[:max_orders]
-                if outcome == "past_floor":
-                    print(
-                        f"[Stagehand] Year {year_filter} fully older than "
-                        f"since={since}; halting iteration"
-                    )
-                    break
-
-            print(
-                f"[Stagehand] Finished scraping. Total orders: "
-                f"{len(self._collected_orders)}"
-            )
-            return self._collected_orders
-
         finally:
-            print("[Stagehand] Closing browser...")
-            await stagehand.close()
-
-    async def _extract_pages_in_current_view(
-        self,
-        stagehand: Any,
-        *,
-        base_url: str,
-        since: date | None,
-        until: date | None,
-        max_orders: int | None,
-        year_filter: int | None,
-    ) -> PageOutcome:
-        """Extract every paginated page in the current view.
-
-        Returns ``"limit_hit"`` when ``max_orders`` is reached, ``"past_floor"``
-        when the current year produced ≥1 order all strictly older than
-        ``since``, or ``"continue"`` to advance to the next year.
-        """
-        view_label = f"year={year_filter}" if year_filter is not None else "default"
-        page_num = 0
-        had_extractions = False
-        all_older_than_since = True
-        while True:
-            page_num += 1
-            print(
-                f"[Stagehand] Extracting orders from page {page_num} ({view_label})..."
-            )
-            print(f"[Stagehand] Current URL: {stagehand.page.url}")
-
+            await asin_reader.close()
+            logger.info("Closing local Stagehand session and browser")
             try:
-                extracted: Any = await stagehand.page.extract(
-                    instruction=(
-                        "Extract all orders visible on this page. "
-                        "For each order, get the order ID, "
-                        "date (YYYY-MM-DD format), "
-                        "total amount in cents, tax in cents, shipping in cents, "
-                        "and all items with ASIN, description, price in cents, "
-                        "and quantity. Also check if there's a 'Next' link."
-                    ),
-                    schema=ExtractedOrders,
-                )
-                print(f"[Stagehand] Extraction result: {extracted}")
-                order_count = len(extracted.orders)
-                print(
-                    f"[Stagehand] Found {order_count} orders on page {page_num} "
-                    f"({view_label})"
-                )
-            except Exception as extract_error:
-                print(f"[Stagehand] ERROR during extraction: {extract_error}")
-                import traceback
+                await session.end()
+            finally:
+                await client.close()
 
-                traceback.print_exc()
-                raise
+    async def _ensure_signed_in(self, session: object) -> None:
+        """Open the orders page, waiting for a human sign-in when required.
 
-            for order in extracted.orders:
-                had_extractions = True
-                try:
-                    parsed_date = date.fromisoformat(order.order_date)
-                except ValueError:
-                    print(
-                        f"[Stagehand] Skipping order {order.order_id} with "
-                        f"unparsable date '{order.order_date}'"
-                    )
-                    continue
+        Amazon redirects an unauthenticated request for the orders page to
+        ``/ap/signin``. The browser is visible, so the user completes the
+        sign-in there and Amazon returns them to the orders page; the stored
+        user-data dir means later runs skip this entirely.
+        """
+        landed = await navigate(session, ORDERS_URL)
+        if not is_signed_out(landed):
+            logger.info("Amazon orders page reached; already signed in")
+            return
 
-                if until is not None and parsed_date > until:
-                    continue
-                if since is not None and parsed_date < since:
-                    continue
-                if since is None or parsed_date >= since:
-                    all_older_than_since = False
-
-                scraped_order = ScrapedOrder(
-                    order_id=order.order_id,
-                    order_date=order.order_date,
-                    order_total_cents=order.order_total_cents,
-                    tax_cents=order.tax_cents,
-                    shipping_cents=order.shipping_cents,
-                    items=[
-                        ScrapedItem(
-                            asin=item.asin,
-                            description=item.description,
-                            price_cents=item.price_cents,
-                            quantity=item.quantity,
-                        )
-                        for item in order.items
-                    ],
-                )
-                self._collected_orders.append(scraped_order)
-
-                if max_orders and len(self._collected_orders) >= max_orders:
-                    return "limit_hit"
-
-            if order_count == 0:
-                if since is not None and had_extractions and all_older_than_since:
-                    return "past_floor"
-                return "continue"
-
-            if not extracted.has_next_page:
-                if since is not None and had_extractions and all_older_than_since:
-                    return "past_floor"
-                return "continue"
-
-            next_url = _page_url(base_url, year_filter, page_num=page_num + 1)
-            print(f"[Stagehand] Navigating to next page: {next_url}")
-            await stagehand.page.goto(next_url, timeout=60000)
-            await asyncio.sleep(2)
+        logger.warning(
+            "Amazon requires sign-in. Complete the login in the open browser "
+            "window within {}s; the session is then saved to {}",
+            _LOGIN_TIMEOUT_SECONDS,
+            self._user_data_dir,
+        )
+        await wait_for_sign_in(
+            session,
+            timeout_seconds=_LOGIN_TIMEOUT_SECONDS,
+            poll_seconds=_LOGIN_POLL_SECONDS,
+        )
