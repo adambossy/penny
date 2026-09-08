@@ -18,7 +18,16 @@ dependencies = [
     "promptorium-python @ git+https://github.com/adambossy/promptorium-python@main",
     "matplotlib>=3.9",
     "boto3>=1.26",
-    "stagehand>=0.5.9",
+    "stagehand>=3.21,<4",
+    "browserbase>=1.4",
+    # Attaches (read-only, over CDP) to the browser Stagehand's LOCAL backend
+    # already launched, to read real product-link hrefs out of the DOM —
+    # Stagehand's own `extract` only ever sees an accessibility tree with no
+    # link targets, so it can never recover a real ASIN. Browser binaries
+    # (`playwright install chromium`) are NOT required for this: attaching
+    # over CDP only needs the bundled driver, not a local launch. See
+    # penny/plugins/amazon/backends/dom_asin_reader.py.
+    "playwright>=1.48",
     "resend>=0.9",
     "alembic>=1.18.4",
     "typer>=0.12",
