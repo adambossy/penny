@@ -90,20 +90,6 @@ def _asin_from_href(href: str) -> str:
     return match.group(1).upper() if match else ""
 
 
-def parse_asins_from_hrefs(hrefs: list[str]) -> list[str]:
-    """Extract ASINs from product-link hrefs, in first-seen order, deduped.
-
-    Partial ASIN recovery beats none: an href with no ASIN-shaped match is
-    silently skipped rather than raising.
-    """
-    seen: dict[str, None] = {}
-    for href in hrefs:
-        asin = _asin_from_href(href)
-        if asin:
-            seen.setdefault(asin, None)
-    return list(seen)
-
-
 # Minimum length (after normalization) the shorter side of a prefix match
 # must reach before that prefix is trusted. Guards against a short, generic
 # description ("Book", "Set of 2") spuriously prefix-matching an unrelated
