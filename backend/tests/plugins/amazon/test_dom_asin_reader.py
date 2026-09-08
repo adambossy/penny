@@ -1,7 +1,7 @@
 """Tests for the Playwright/CDP real-ASIN reader.
 
 Two layers:
-  - Pure ``parse_asins_from_hrefs`` logic — no browser involved, always runs.
+  - Pure ``_asin_from_href`` logic — no browser involved, always runs.
   - An offline end-to-end proof against a real (throwaway) Chromium: attach
     over CDP, read ASINs from a local HTML fixture, and confirm closing the
     reader does not take down the browser it attached to. This needs
@@ -17,74 +17,56 @@ import pytest
 
 from penny.plugins.amazon.backends.dom_asin_reader import (
     LocalAsinReader,
+    _asin_from_href,
     free_local_port,
     match_items_to_links,
-    parse_asins_from_hrefs,
 )
 
-# --- parse_asins_from_hrefs: pure logic, various href shapes ----------------
+# --- _asin_from_href: pure logic, various href shapes -----------------------
 
 
 def test_parses_asin_from_a_dp_style_href() -> None:
-    hrefs = [
+    href = (
         "https://www.amazon.com/Some-Widget/dp/B01ABCDEF2/ref=cm_cr_arp_d_product_top"
-    ]
-    assert parse_asins_from_hrefs(hrefs) == ["B01ABCDEF2"]
+    )
+    assert _asin_from_href(href) == "B01ABCDEF2"
 
 
 def test_parses_asin_from_a_gp_product_style_href() -> None:
-    hrefs = ["https://www.amazon.com/gp/product/B00X4WHP5E/ref=ppx_yo_dt_b"]
-    assert parse_asins_from_hrefs(hrefs) == ["B00X4WHP5E"]
+    href = "https://www.amazon.com/gp/product/B00X4WHP5E/ref=ppx_yo_dt_b"
+    assert _asin_from_href(href) == "B00X4WHP5E"
 
 
 def test_parses_asin_from_a_bare_dp_href_with_no_trailing_slash() -> None:
-    assert parse_asins_from_hrefs(["https://www.amazon.com/dp/B01ABCDEF2"]) == [
-        "B01ABCDEF2"
-    ]
+    assert _asin_from_href("https://www.amazon.com/dp/B01ABCDEF2") == "B01ABCDEF2"
 
 
 def test_parses_asin_from_a_dp_href_with_a_trailing_slash() -> None:
-    assert parse_asins_from_hrefs(["https://www.amazon.com/dp/B01ABCDEF2/"]) == [
-        "B01ABCDEF2"
-    ]
+    assert _asin_from_href("https://www.amazon.com/dp/B01ABCDEF2/") == "B01ABCDEF2"
 
 
 def test_parses_asin_from_a_dp_href_with_a_query_string() -> None:
-    assert parse_asins_from_hrefs(
-        ["https://www.amazon.com/dp/B01ABCDEF2?th=1&psc=1"]
-    ) == ["B01ABCDEF2"]
+    assert (
+        _asin_from_href("https://www.amazon.com/dp/B01ABCDEF2?th=1&psc=1")
+        == "B01ABCDEF2"
+    )
 
 
 def test_parses_asin_from_a_relative_href() -> None:
-    assert parse_asins_from_hrefs(["/dp/B01ABCDEF2/ref=od_ep"]) == ["B01ABCDEF2"]
+    assert _asin_from_href("/dp/B01ABCDEF2/ref=od_ep") == "B01ABCDEF2"
 
 
 def test_normalizes_lowercase_asin_characters_to_uppercase() -> None:
-    assert parse_asins_from_hrefs(["https://www.amazon.com/dp/b01abcdef2"]) == [
-        "B01ABCDEF2"
-    ]
+    assert _asin_from_href("https://www.amazon.com/dp/b01abcdef2") == "B01ABCDEF2"
 
 
 def test_ignores_non_product_hrefs() -> None:
-    hrefs = [
+    for href in (
         "https://www.amazon.com/gp/help/customer/display.html",
         "https://www.amazon.com/review/R1234567890",
         "https://www.amazon.com/gp/css/order-history",
-    ]
-    assert parse_asins_from_hrefs(hrefs) == []
-
-
-def test_dedupes_the_same_asin_seen_twice_preserving_first_seen_order() -> None:
-    hrefs = [
-        "https://www.amazon.com/dp/B01ABCDEF2/ref=title",
-        "https://www.amazon.com/dp/B00X4WHP5E/ref=title",
-        "https://www.amazon.com/dp/B01ABCDEF2/ref=image",  # same product, image link
-    ]
-    assert parse_asins_from_hrefs(hrefs) == ["B01ABCDEF2", "B00X4WHP5E"]
-
-
-def test_empty_input_yields_empty_output() -> None:
-    assert parse_asins_from_hrefs([]) == []
+    ):
+        assert _asin_from_href(href) == ""
 
 
 def test_free_local_port_returns_a_usable_port_number() -> None:
@@ -272,9 +254,10 @@ async def test_local_asin_reader_reads_real_asins_from_a_live_chromium_dom(
             "A Widget",
             "A Widget (image link)",
         ]
-        assert parse_asins_from_hrefs([href for href, _ in links]) == [
+        assert [_asin_from_href(href) for href, _ in links] == [
             "B00X4WHP5E",
             "B01ABCDEF2",
+            "B01ABCDEF2",  # the image link points at the same product
         ]
 
         await reader.close()
