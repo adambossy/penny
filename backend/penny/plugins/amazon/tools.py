@@ -189,6 +189,7 @@ async def scrape_amazon_orders(
     max_orders: int = 10,
     backend: str = "stagehand-browserbase",
     profile_key: str | None = None,
+    fetch_item_details: bool = True,
 ) -> dict[str, Any]:
     """Scrape Amazon order history for every enabled profile.
 
@@ -199,6 +200,13 @@ async def scrape_amazon_orders(
         backend: ``"stagehand"`` (local), ``"stagehand-browserbase"``
             (cloud), or ``"playwriter"``.
         profile_key: If set, scrape only this profile.
+        fetch_item_details: Fetch each order's detail page for real
+            per-item price/ASIN/quantity and order-level tax/shipping
+            (default True — the order-history list page never carries this
+            data). Costs one extra page load + LLM call per order; set to
+            ``False`` only for a cheap/fast bulk backfill where per-item
+            accuracy doesn't matter yet. ``max_orders`` still caps the work
+            either way.
     """
     if backend not in ("stagehand", "stagehand-browserbase", "playwriter"):
         return {
@@ -240,6 +248,7 @@ async def scrape_amazon_orders(
                 until=until_date,
                 max_orders=max_orders,
                 profile_key=profile_key,
+                fetch_item_details=fetch_item_details,
             )
         except Exception as exc:
             return {

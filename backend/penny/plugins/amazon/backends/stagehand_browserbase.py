@@ -1,4 +1,15 @@
-"""Stagehand BROWSERBASE backend for Amazon order scraping."""
+"""Stagehand BROWSERBASE backend for Amazon order scraping.
+
+Runs the scrape in a Browserbase cloud browser instead of a local one, which
+is what makes an unattended scrape possible: login state lives in a
+Browserbase *context* (server-side), not on this machine's disk, so a
+headless or scheduled run can reuse a session a human established earlier —
+and several accounts can each hold their own live context at once.
+
+Signing in happens through Browserbase's Session Live View: the run logs a
+URL, the user opens it in their own browser, authenticates there, and the
+cookies land in the context.
+"""
 
 from __future__ import annotations
 
@@ -6,140 +17,36 @@ import asyncio
 from datetime import date
 import importlib
 import os
-from typing import Any, Literal
+from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, Field
 
-from penny.plugins.amazon.scraper import ScrapedItem, ScrapedOrder
-
-# Maximum backward-iteration window when no `since` is provided. Amazon's
-# year-filter dropdown lists years back to ~2010; this keeps iteration bounded
-# even when the orchestrator's DB-derived floor is absent.
-_DEFAULT_FLOOR_YEARS = 20
+from penny.plugins.amazon.backends.order_history import (
+    ORDERS_URL,
+    OrderHarvester,
+    is_signed_out,
+    navigate,
+    wait_for_sign_in,
+)
+from penny.plugins.amazon.scraper import ScrapedOrder
 
 # Browserbase per-session lifetime cap (seconds). Default is ~5 min on free
 # plans, which is too short for multi-page year scrapes (~30s/page). Bumped so
 # a single year of orders can complete in one session without retry-thrashing.
 _DEFAULT_SESSION_TIMEOUT_SECONDS = 1800
 
-PageOutcome = Literal["continue", "limit_hit", "past_floor"]
-
-
-_ORDERS_PER_PAGE = 10
-
-
-def _page_url(base_url: str, year_filter: int | None, page_num: int) -> str:
-    """URL for ``page_num`` (1-indexed) of the orders view.
-
-    Why: Amazon's "Next" link is an SPA-style hyperlink that triggers a
-    soft-navigation; under Stagehand the CDP target on the old frame is
-    destroyed before Stagehand re-attaches, raising ``Page.evaluate: Target
-    page, context or browser has been closed``. Direct ``goto()`` to the
-    fully-qualified URL sidesteps that race.
-    """
-    params: list[str] = []
-    if year_filter is not None:
-        params.append(f"timeFilter=year-{year_filter}")
-    if page_num > 1:
-        params.append(f"startIndex={(page_num - 1) * _ORDERS_PER_PAGE}")
-    if not params:
-        return base_url
-    return f"{base_url}?{'&'.join(params)}"
-
-
-def _years_for_window(
-    *,
-    since: date | None,
-    until: date | None,
-    max_orders: int | None,
-    today: date,
-    floor_years: int = _DEFAULT_FLOOR_YEARS,
-) -> list[int | None]:
-    """Compute the year-filter URLs to visit for a given date window.
-
-    Returns a most-recent-first list of years to iterate via Amazon's
-    ``?timeFilter=year-{Y}`` URL parameter. A single ``None`` entry means
-    "use Amazon's default view" (typically past 3 months) and is returned
-    only when no constraint is provided at all.
-    """
-    if since is None and until is None and max_orders is None:
-        return [None]
-
-    upper = until.year if until is not None else today.year
-    if upper > today.year:
-        upper = today.year
-
-    if since is not None:
-        lower = since.year
-    else:
-        lower = today.year - floor_years
-
-    if lower > upper:
-        return []
-
-    return list(range(upper, lower - 1, -1))
-
-
-class ExtractedItem(BaseModel):
-    """Schema for extracting a single item from Amazon order."""
-
-    model_config = {"populate_by_name": True}
-
-    asin: str = Field(..., description="Amazon Standard Identification Number")
-    description: str = Field(..., description="Item name/description")
-    price_cents: int = Field(
-        ..., alias="priceCents", description="Price in cents (e.g., $49.77 = 4977)"
-    )
-    quantity: int = Field(default=1, description="Quantity ordered")
-
-
-class ExtractedOrder(BaseModel):
-    """Schema for extracting a single Amazon order."""
-
-    model_config = {"populate_by_name": True}
-
-    order_id: str = Field(
-        ..., alias="orderId", description="Order ID (e.g., 113-5524816-2451403)"
-    )
-    order_date: str = Field(
-        ..., alias="orderDate", description="Order date in YYYY-MM-DD format"
-    )
-    order_total_cents: int = Field(
-        ..., alias="orderTotalCents", description="Total in cents"
-    )
-    tax_cents: int = Field(
-        default=0, alias="taxCents", description="Tax amount in cents"
-    )
-    shipping_cents: int = Field(
-        default=0, alias="shippingCents", description="Shipping in cents"
-    )
-    items: list[ExtractedItem] = Field(default_factory=list, description="Order items")
-
-
-class ExtractedOrders(BaseModel):
-    """Schema for extracting multiple orders from a page."""
-
-    model_config = {"populate_by_name": True}
-
-    orders: list[ExtractedOrder] = Field(
-        default_factory=list, description="List of orders on current page"
-    )
-    has_next_page: bool = Field(
-        default=False, alias="hasNextPage", description="Whether there are more orders"
-    )
+_LOGIN_TIMEOUT_SECONDS = 300
+_LOGIN_POLL_SECONDS = 5
 
 
 class StagehandBrowserbaseBackend:
     """Amazon scraper backend using Stagehand with Browserbase.
 
-    This backend uses Stagehand with Browserbase cloud browsers to scrape
-    Amazon order history. Requires BROWSERBASE_API_KEY and BROWSERBASE_PROJECT_ID
-    environment variables.
+    Requires BROWSERBASE_API_KEY and BROWSERBASE_PROJECT_ID. For
+    authenticated scraping, use Browserbase contexts to persist login state:
 
-    For authenticated scraping, use Browserbase contexts to persist login state:
-    1. Create a context with `create_context()`
-    2. Log in manually via Session Live View
+    1. Create a context with ``create_context()``
+    2. Log in manually via Session Live View (``login_mode=True``)
     3. Reuse the context_id for future scraping sessions
     """
 
@@ -184,12 +91,12 @@ class StagehandBrowserbaseBackend:
         self._context_id = context_id
         self._persist_context = persist_context
         self._login_mode = login_mode
-        self._collected_orders: list[ScrapedOrder] = []  # Stores partial results
+        self._harvester = OrderHarvester()
 
     @property
     def collected_orders(self) -> list[ScrapedOrder]:
-        """Get orders collected so far (useful for partial recovery on failure)."""
-        return self._collected_orders
+        """Orders collected so far (used for partial recovery on failure)."""
+        return self._harvester.orders
 
     @classmethod
     def create_context(
@@ -229,7 +136,6 @@ class StagehandBrowserbaseBackend:
                 "browserbase package not installed. "
                 "Install with: pip install browserbase"
             ) from e
-        browserbase_class = browserbase_module.Browserbase
 
         api_key = browserbase_api_key or os.getenv("BROWSERBASE_API_KEY", "")
         project_id = browserbase_project_id or os.getenv("BROWSERBASE_PROJECT_ID", "")
@@ -239,7 +145,7 @@ class StagehandBrowserbaseBackend:
         if not project_id:
             raise ValueError("BROWSERBASE_PROJECT_ID is required")
 
-        client = browserbase_class(api_key=api_key)
+        client = browserbase_module.Browserbase(api_key=api_key)
         context = client.contexts.create(project_id=project_id)
         return str(context.id)
 
@@ -256,12 +162,39 @@ class StagehandBrowserbaseBackend:
         """
         return f"https://www.browserbase.com/sessions/{session_id}"
 
+    def login(self) -> None:
+        """Establish this context's Amazon session via Session Live View.
+
+        Opens a session on the configured context, parks on Amazon's sign-in
+        page, and waits for the user to authenticate through the Live View
+        URL it logs. The cookies land in the context, so later scrapes on the
+        same context start already signed in.
+        """
+        logger.info(
+            "Browserbase login flow start: context_id_set={}",
+            self._context_id is not None,
+        )
+        asyncio.run(self._login_async())
+
+    async def _login_async(self) -> None:
+        """Async implementation of the interactive login flow."""
+        client, session, live_view_url = await self._open_session()
+        try:
+            await self._ensure_signed_in(session, live_view_url)
+        finally:
+            logger.info("Closing Browserbase session")
+            try:
+                await session.end()
+            finally:
+                await client.close()
+
     def scrape_order_history(
         self,
         *,
         since: date | None = None,
         until: date | None = None,
         max_orders: int | None = None,
+        fetch_item_details: bool = True,
     ) -> list[ScrapedOrder]:
         """Scrape Amazon order history via Stagehand Browserbase.
 
@@ -270,45 +203,35 @@ class StagehandBrowserbaseBackend:
                 by orchestrator).
             until: Inclusive upper bound on ``order_date``.
             max_orders: Optional maximum orders across all visited years.
+            fetch_item_details: Whether to fetch each order's detail page for
+                real per-item data (see ``AmazonScraperBackend``). Costs one
+                extra navigation + extraction per order on a per-minute
+                billed session; ``max_orders`` still bounds the total.
 
         Returns:
             List of ScrapedOrder objects.
         """
         logger.info(
             "Browserbase scrape_order_history start: since={} until={} "
-            "max_orders={} context_id_set={} login_mode={}",
+            "max_orders={} fetch_item_details={} context_id_set={} login_mode={}",
             since,
             until,
             max_orders,
+            fetch_item_details,
             self._context_id is not None,
             self._login_mode,
         )
-        try:
-            loop = asyncio.get_running_loop()
-            logger.debug("Browserbase backend detected active event loop")
-            nest_asyncio_module = importlib.import_module("nest_asyncio")
-            apply = getattr(nest_asyncio_module, "apply", None)
-            if callable(apply):
-                apply()
-                logger.debug("Applied nest_asyncio for nested event loop support")
-            return loop.run_until_complete(
-                self._scrape_order_history_async(
-                    since=since, until=until, max_orders=max_orders
-                )
+        # Callers reach the backends off the event loop (the @tool wrappers use
+        # asyncio.to_thread), so owning the loop here keeps the async plumbing
+        # to a single well-defined entry point.
+        return asyncio.run(
+            self._scrape_order_history_async(
+                since=since,
+                until=until,
+                max_orders=max_orders,
+                fetch_item_details=fetch_item_details,
             )
-        except RuntimeError:
-            logger.debug("Browserbase backend using manual event loop")
-            loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(loop)
-                return loop.run_until_complete(
-                    self._scrape_order_history_async(
-                        since=since, until=until, max_orders=max_orders
-                    )
-                )
-            finally:
-                asyncio.set_event_loop(None)
-                loop.close()
+        )
 
     async def _scrape_order_history_async(
         self,
@@ -316,18 +239,35 @@ class StagehandBrowserbaseBackend:
         since: date | None,
         until: date | None,
         max_orders: int | None,
+        fetch_item_details: bool,
     ) -> list[ScrapedOrder]:
         """Async implementation of order history scraping."""
-        logger.info("Browserbase async scrape starting")
+        client, session, live_view_url = await self._open_session()
+
+        try:
+            await self._ensure_signed_in(session, live_view_url)
+            return await self._harvester.harvest(
+                session,
+                since=since,
+                until=until,
+                max_orders=max_orders,
+                fetch_item_details=fetch_item_details,
+            )
+        finally:
+            logger.info("Closing Browserbase session")
+            try:
+                await session.end()
+            finally:
+                await client.close()
+
+    async def _open_session(self) -> tuple[Any, Any, str]:
+        """Start a Browserbase session; return (client, session, live view URL)."""
         try:
             stagehand_module = importlib.import_module("stagehand")
         except ImportError as e:
             raise ImportError(
                 "Stagehand is not installed. Install with: pip install stagehand"
             ) from e
-        logger.debug("Imported stagehand module successfully")
-        stagehand_class = stagehand_module.Stagehand
-        stagehand_config_class = stagehand_module.StagehandConfig
 
         if not self._browserbase_api_key:
             raise ValueError(
@@ -339,19 +279,37 @@ class StagehandBrowserbaseBackend:
                 "BROWSERBASE_PROJECT_ID environment variable is required for "
                 "Browserbase backend"
             )
-        logger.info("Browserbase credentials detected in environment/config")
+        if not self._model_api_key:
+            raise ValueError(
+                "MODEL_API_KEY (or GOOGLE_API_KEY) is required for the "
+                "Browserbase backend"
+            )
 
-        # Build session create params: bump per-session timeout (default ~5 min
-        # on free plans is too short) and attach the persistent context if any.
-        session_create_params: dict[str, Any] = {
-            "timeout": _DEFAULT_SESSION_TIMEOUT_SECONDS,
-        }
+        client = stagehand_module.AsyncStagehand(
+            browserbase_api_key=self._browserbase_api_key,
+            browserbase_project_id=self._browserbase_project_id,
+            model_api_key=self._model_api_key,
+        )
+        logger.info("Starting Browserbase Stagehand session")
+        session = await client.sessions.start(
+            model_name=self._model_name,
+            browser={"type": "browserbase"},
+            browserbase_session_create_params=self._session_create_params(),
+        )
+        live_view_url = self.get_session_live_view_url(session.data.session_id)
+        logger.info(
+            "Browserbase session {} started (live view: {})",
+            session.data.session_id,
+            live_view_url,
+        )
+        return client, session, live_view_url
+
+    def _session_create_params(self) -> dict[str, Any]:
+        """Browserbase session params: lifetime cap plus the login context."""
+        params: dict[str, Any] = {"timeout": _DEFAULT_SESSION_TIMEOUT_SECONDS}
         if self._context_id:
-            session_create_params["browserSettings"] = {
-                "context": {
-                    "id": self._context_id,
-                    "persist": self._persist_context,
-                }
+            params["browserSettings"] = {
+                "context": {"id": self._context_id, "persist": self._persist_context}
             }
             logger.info(
                 "Using Browserbase context_id={} (persist={}, timeout={}s)",
@@ -364,257 +322,45 @@ class StagehandBrowserbaseBackend:
                 "No Browserbase context ID configured (timeout={}s)",
                 _DEFAULT_SESSION_TIMEOUT_SECONDS,
             )
+        return params
 
-        config = stagehand_config_class(
-            env="BROWSERBASE",
-            apiKey=self._browserbase_api_key,
-            projectId=self._browserbase_project_id,
-            modelName=self._model_name,
-            modelApiKey=self._model_api_key,
-            browserbaseSessionCreateParams=session_create_params,
-        )
+    async def _ensure_signed_in(self, session: Any, live_view_url: str) -> None:
+        """Open the orders page, handling Amazon's sign-in redirect.
 
-        logger.info("Initializing Stagehand Browserbase session")
-        stagehand = stagehand_class(config)
-        await stagehand.init()
-        logger.info("Stagehand init complete")
-
-        # Log session URL for debugging
-        session_id = getattr(stagehand, "session_id", None)
-        if session_id:
-            session_url = self.get_session_live_view_url(session_id)
-            logger.info("Browserbase session live view: {}", session_url)
-            if self._context_id:
-                logger.info(
-                    "Browserbase session attached to context: {}", self._context_id
-                )
-        else:
-            logger.warning("Stagehand session_id was not available after init")
-
-        try:
-            # Initial navigation: base orders URL is enough to trigger any
-            # required login flow. Per-year navigation happens after login.
-            base_url = "https://www.amazon.com/your-orders/orders"
-            logger.info("Navigating to Amazon orders URL: {}", base_url)
-            await stagehand.page.goto(base_url, timeout=60000)
-            logger.info("Navigation to Amazon orders URL completed")
-
-            # Check if login is required
-            page = stagehand.page
-            current_url = page.url
-            logger.info("Current page URL after navigation: {}", current_url)
-
-            if "signin" in current_url or "ap/signin" in current_url:
-                logger.warning("Amazon sign-in page detected")
-                if self._login_mode:
-                    # Wait for user to log in via Session Live View
-                    logger.info(
-                        "Login mode enabled; waiting for manual login in Live View"
-                    )
-                    if session_id:
-                        live_url = self.get_session_live_view_url(session_id)
-                        logger.info(
-                            "Open Browserbase Live View for login: {}", live_url
-                        )
-                    logger.info("Waiting up to 5 minutes for Amazon login")
-
-                    max_wait_seconds = 300  # 5 minutes
-                    for i in range(max_wait_seconds):
-                        current_url = page.url
-                        if "your-orders" in current_url and "signin" not in current_url:
-                            logger.info("Login successful; now on orders page")
-                            break
-                        if i > 0 and i % 30 == 0:
-                            logger.info("Still waiting for login ({}s elapsed)", i)
-                        await asyncio.sleep(1)
-                    else:
-                        raise TimeoutError(
-                            "Timed out waiting for Amazon login. "
-                            "Please log in within 5 minutes via Session Live View."
-                        )
-                elif self._context_id:
-                    raise RuntimeError(
-                        "Amazon login required despite using a context. "
-                        "The context may have expired. Please:\n"
-                        "1. Create a new context with create_context()\n"
-                        "2. Log in via Session Live View using --login flag\n"
-                        "3. Retry with the new context_id"
-                    )
-                else:
-                    raise RuntimeError(
-                        "Amazon login required. To use Browserbase:\n"
-                        "1. Create a context: "
-                        "ctx_id = StagehandBrowserbaseBackend.create_context()\n"
-                        "2. Run with --login flag to authenticate\n"
-                        "3. Reuse the same context_id for automated scraping"
-                    )
-
-            year_filters = _years_for_window(
-                since=since,
-                until=until,
-                max_orders=max_orders,
-                today=date.today(),
-            )
-            logger.info(
-                "Browserbase year_filters resolved: {} (since={} until={})",
-                year_filters,
-                since,
-                until,
-            )
-
-            # Reset collected orders for this run
-            self._collected_orders = []
-
-            for year_filter in year_filters:
-                if year_filter is not None:
-                    year_url = _page_url(base_url, year_filter, page_num=1)
-                    logger.info("Navigating to year-filtered URL: {}", year_url)
-                    await stagehand.page.goto(year_url, timeout=60000)
-
-                # Give the orders page time to fully load
-                await asyncio.sleep(2)
-
-                outcome = await self._extract_pages_in_current_view(
-                    stagehand,
-                    base_url=base_url,
-                    since=since,
-                    until=until,
-                    max_orders=max_orders,
-                    year_filter=year_filter,
-                )
-                if outcome == "limit_hit":
-                    return self._collected_orders[:max_orders]
-                if outcome == "past_floor":
-                    logger.info(
-                        "Year {} fully older than since={}; halting iteration",
-                        year_filter,
-                        since,
-                    )
-                    break
-
-            total = len(self._collected_orders)
-            logger.info(
-                "Browserbase scrape finished. Total orders collected: {}", total
-            )
-            return self._collected_orders
-
-        finally:
-            logger.info("Closing Stagehand Browserbase session")
-            await stagehand.close()
-            logger.info("Stagehand Browserbase session closed")
-
-    async def _extract_pages_in_current_view(
-        self,
-        stagehand: Any,
-        *,
-        base_url: str,
-        since: date | None,
-        until: date | None,
-        max_orders: int | None,
-        year_filter: int | None,
-    ) -> PageOutcome:
-        """Extract all paginated order rows visible in the current view.
-
-        Appends orders that fall within ``since``/``until`` to
-        ``self._collected_orders``. Returns one of:
-
-        - ``"limit_hit"``: ``max_orders`` cap reached; caller stops iterating.
-        - ``"past_floor"``: this year produced ≥1 extracted order and every
-          one was strictly older than ``since``; caller stops iterating.
-        - ``"continue"``: caller should advance to the next year (if any).
+        In ``login_mode`` the run parks on the sign-in page and waits for the
+        user to authenticate through the Live View; otherwise a sign-in
+        redirect means the context is missing or expired, which is an error
+        the caller has to resolve rather than something to wait out.
         """
-        page_num = 0
-        view_label = f"year={year_filter}" if year_filter is not None else "default"
-        had_extractions = False
-        all_older_than_since = True
-        while True:
-            page_num += 1
-            logger.info("Extracting orders from page {} ({})", page_num, view_label)
-            extracted: Any = await stagehand.page.extract(
-                instruction=(
-                    "Extract all orders visible on this page. "
-                    "For each order, get the order ID, "
-                    "date (YYYY-MM-DD format), "
-                    "total amount in cents, tax in cents, shipping in cents, "
-                    "and all items with ASIN, description, price in cents, "
-                    "and quantity. Also check if there's a 'Next' link."
-                ),
-                schema=ExtractedOrders,
-            )
-            logger.debug(
-                "Stagehand extraction returned payload for page {} ({})",
-                page_num,
-                view_label,
-            )
-            order_count = len(extracted.orders)
-            logger.info(
-                "Found {} orders on page {} ({})", order_count, page_num, view_label
+        landed = await navigate(session, ORDERS_URL)
+        if not is_signed_out(landed):
+            logger.info("Amazon orders page reached; context is authenticated")
+            return
+
+        if not self._login_mode:
+            if self._context_id:
+                raise RuntimeError(
+                    "Amazon login required despite using a context. "
+                    "The context may have expired. Please:\n"
+                    "1. Clear it with clear_amazon_login_context()\n"
+                    "2. Re-run so a fresh context is created and logged in\n"
+                )
+            raise RuntimeError(
+                "Amazon login required. To use Browserbase:\n"
+                "1. Create a context: "
+                "ctx_id = StagehandBrowserbaseBackend.create_context()\n"
+                "2. Run in login_mode to authenticate via Session Live View\n"
+                "3. Reuse the same context_id for automated scraping"
             )
 
-            for order in extracted.orders:
-                had_extractions = True
-                try:
-                    parsed_date = date.fromisoformat(order.order_date)
-                except ValueError:
-                    logger.warning(
-                        "Skipping order {} with unparsable date '{}'",
-                        order.order_id,
-                        order.order_date,
-                    )
-                    continue
-
-                if until is not None and parsed_date > until:
-                    continue
-                if since is not None and parsed_date < since:
-                    continue
-                if since is None or parsed_date >= since:
-                    all_older_than_since = False
-
-                scraped_order = ScrapedOrder(
-                    order_id=order.order_id,
-                    order_date=order.order_date,
-                    order_total_cents=order.order_total_cents,
-                    tax_cents=order.tax_cents,
-                    shipping_cents=order.shipping_cents,
-                    items=[
-                        ScrapedItem(
-                            asin=item.asin,
-                            description=item.description,
-                            price_cents=item.price_cents,
-                            quantity=item.quantity,
-                        )
-                        for item in order.items
-                    ],
-                )
-                self._collected_orders.append(scraped_order)
-
-                if max_orders and len(self._collected_orders) >= max_orders:
-                    logger.info(
-                        "Reached max_orders limit ({}), stopping extraction",
-                        max_orders,
-                    )
-                    return "limit_hit"
-
-            if order_count == 0:
-                logger.info(
-                    "Page {} ({}) returned 0 orders; ending pagination",
-                    page_num,
-                    view_label,
-                )
-                if since is not None and had_extractions and all_older_than_since:
-                    return "past_floor"
-                return "continue"
-
-            if not extracted.has_next_page:
-                logger.info(
-                    "No next page detected after page {} ({})", page_num, view_label
-                )
-                if since is not None and had_extractions and all_older_than_since:
-                    return "past_floor"
-                return "continue"
-
-            next_url = _page_url(base_url, year_filter, page_num=page_num + 1)
-            logger.info("Navigating to next page URL: {}", next_url)
-            await stagehand.page.goto(next_url, timeout=60000)
-            await asyncio.sleep(2)
-            logger.info("Pagination navigation completed")
+        logger.warning(
+            "Amazon requires sign-in. Open the Browserbase Live View and log "
+            "in within {}s: {}",
+            _LOGIN_TIMEOUT_SECONDS,
+            live_view_url,
+        )
+        await wait_for_sign_in(
+            session,
+            timeout_seconds=_LOGIN_TIMEOUT_SECONDS,
+            poll_seconds=_LOGIN_POLL_SECONDS,
+        )

@@ -25,6 +25,7 @@ class AmazonScraperBackend(Protocol):
         since: date | None = None,
         until: date | None = None,
         max_orders: int | None = None,
+        fetch_item_details: bool = True,
     ) -> list[ScrapedOrder]:
         """Scrape Amazon order history within an inclusive date window.
 
@@ -36,6 +37,11 @@ class AmazonScraperBackend(Protocol):
                 upper bound.
             max_orders: Optional maximum number of orders to scrape across all
                 pages/years. ``None`` means scrape everything that matches.
+            fetch_item_details: Whether to fetch each order's detail page for
+                real per-item price/ASIN/quantity and order-level tax/
+                shipping (the list page never carries them). Costs one extra
+                navigation + extraction per order; ``max_orders`` still
+                bounds the total.
 
         Returns:
             List of ScrapedOrder objects with order details and items.

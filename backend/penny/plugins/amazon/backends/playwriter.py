@@ -33,6 +33,7 @@ class PlaywriterBackend:
         since: date | None = None,
         until: date | None = None,
         max_orders: int | None = None,
+        fetch_item_details: bool = True,
     ) -> list[ScrapedOrder]:
         """Scrape Amazon order history via Playwriter MCP.
 
@@ -40,6 +41,11 @@ class PlaywriterBackend:
             since: Inclusive lower bound on ``order_date``.
             until: Inclusive upper bound on ``order_date``.
             max_orders: Optional maximum orders to scrape.
+            fetch_item_details: Accepted for ``AmazonScraperBackend``
+                interface parity; unused here. This backend runs a single
+                agent turn that already extracts item data inline from
+                whatever the page shows it, with no separate list/detail
+                phases to toggle.
 
         Returns:
             List of ScrapedOrder objects.

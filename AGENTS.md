@@ -183,7 +183,8 @@ Run these before completing any unit of work. There is no mypy gate yet.
   variable always wins. Keep `.env.example` current.
 - **Errors**: stream-level failures surface as `{type:"error"}` SSE frames →
   red banner in ChatScreen; tool failures as `tool-output-error` frames.
-- **Workspace**: `~/.penny` (memory/, reports/, logs/, config.toml,
+- **Workspace**: `~/.penny` (memory/, reports/, logs/, browser/ — one
+  Chrome user-data dir per Amazon login profile, config.toml,
   user_id); an existing `~/.transactoid` is used as-is. `backend/.env`'s
   `PENNY_WORKSPACE` is symlinked into every worktree identically; a
   gitignored `backend/.penny-workspace` overrides it per-worktree without

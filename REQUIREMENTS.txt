@@ -61,8 +61,40 @@ P4. Scheduled reports & the daemon
     prompt or the model.
 
 P5. Amazon itemization
-    Optionally enrich Amazon transactions by scraping order detail so spending
-    is attributed per item rather than per lump charge.
+    Enrich Amazon transactions by scraping order detail so spending is
+    attributed per item rather than per lump charge. The order-history LIST
+    page never carries per-item price, ASIN, or quantity — only each order's
+    id, date, and total — so a scrape fetches every order's DETAIL page (one
+    extra page load + LLM extraction per order) to get the real values;
+    fetching is on by default but can be turned off per scrape to trade
+    per-item accuracy for a cheaper/faster bulk backfill, and `max_orders`
+    bounds the work either way. Extracted price/quantity/tax/shipping are
+    never negative, so a detail page that fails or returns nothing degrades
+    a transaction's itemization (equal split, or one line item) rather than
+    corrupting it.
+
+    Real ASINs cannot come from the LLM extraction step: Stagehand's
+    `extract` sees only an accessibility tree with no link targets, so it
+    can never recover a product `href`, only node IDs. The LOCAL backend
+    closes this gap by attaching a second, read-only Playwright client to
+    the same Chrome (over CDP) and reading product-link hrefs straight out
+    of the DOM; the Browserbase backend has no such capability and always
+    falls back to a synthetic identity. An item with no real ASIN — no
+    capability to read one, or Amazon genuinely shows none (digital goods,
+    gift wrap) — gets a synthetic identity derived from a hash of its own
+    content (description, price, quantity), not its position in the
+    extracted list: extraction order comes from an LLM and is not
+    guaranteed stable across re-scrapes, so a position-keyed identity risks
+    silently overwriting one item's row with another's data on a reordered
+    re-scrape, whereas a content-keyed one always maps the same item back
+    to the same row.
+
+    The LOCAL backend's browser is never run headless: Amazon's
+    order-DETAIL page (unlike the list page) redirects a headless
+    navigation to its sign-in portal even against an otherwise-valid saved
+    session, so a headless run silently loses all real itemization for
+    every order. This is a hardcoded property of the backend, not a
+    caller-settable default.
 
 P6. Conversation persistence
     Persist conversations and messages so chat history survives across
@@ -77,9 +109,10 @@ P6b. URL routing & deep links
 
 P7. Agent workspace
     Maintain a persistent local workspace (~/.penny: memory/, reports/,
-    logs/, config.toml, user_id) that carries user state (e.g. budget notes,
-    merchant rules) across chat, plugin, and scheduled runs. The workspace is
-    a plain directory the user owns; an existing ~/.transactoid is honored.
+    logs/, browser/, config.toml, user_id) that carries user state (e.g.
+    budget notes, merchant rules, per-Amazon-profile browser sessions) across
+    chat, plugin, and scheduled runs. The workspace is a plain directory the
+    user owns; an existing ~/.transactoid is honored.
 
 P8. Output language
     Reports and chat responses are written in English (US) with $ currency,
