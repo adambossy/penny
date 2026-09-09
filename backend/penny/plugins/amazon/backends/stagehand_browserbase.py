@@ -221,9 +221,7 @@ class StagehandBrowserbaseBackend:
             self._context_id is not None,
             self._login_mode,
         )
-        # Callers reach the backends off the event loop (the @tool wrappers use
-        # asyncio.to_thread), so owning the loop here keeps the async plumbing
-        # to a single well-defined entry point.
+        # See AmazonScraperBackend for why this owns its own event loop.
         return asyncio.run(
             self._scrape_order_history_async(
                 since=since,
