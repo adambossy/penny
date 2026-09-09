@@ -17,6 +17,13 @@ class AmazonScraperBackend(Protocol):
 
     Year-by-year navigation, when needed, is the implementation's concern.
     Callers pass only the date window (since/until) plus an optional cap.
+
+    ``scrape_order_history`` is a synchronous entry point over an
+    async-internally implementation: callers reach backends off the event
+    loop (the ``@tool`` wrappers use ``asyncio.to_thread``), so each
+    implementation owns its own ``asyncio.run()`` call rather than assuming
+    a loop is already running. This keeps the async plumbing to a single
+    well-defined entry point per backend.
     """
 
     def scrape_order_history(

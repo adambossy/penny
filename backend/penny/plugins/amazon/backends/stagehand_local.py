@@ -138,9 +138,7 @@ class StagehandLocalBackend:
             fetch_item_details,
             self._user_data_dir,
         )
-        # Callers reach the backends off the event loop (the @tool wrappers use
-        # asyncio.to_thread), so owning the loop here keeps the async plumbing
-        # to a single well-defined entry point.
+        # See AmazonScraperBackend for why this owns its own event loop.
         return asyncio.run(
             self._scrape_order_history_async(
                 since=since,
