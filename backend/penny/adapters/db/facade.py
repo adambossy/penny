@@ -2489,9 +2489,12 @@ class DB:
             )
             for txn in derived_txns:
                 # Expunge the joined parent before the txn so neither is expired
-                # by the implicit commit on session exit.
-                if txn.plaid_transaction is not None:
-                    session.expunge(txn.plaid_transaction)
+                # by the implicit commit on session exit. A split shares one
+                # plaid row across several derived rows, so the parent may
+                # already be gone -- expunging it twice raises.
+                parent = txn.plaid_transaction
+                if parent is not None and parent in session:
+                    session.expunge(parent)
                 session.expunge(txn)
             return derived_txns
 
