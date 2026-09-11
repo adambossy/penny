@@ -31,11 +31,8 @@ ignore = [
 "tests/**" = ["S101", "S105", "S106", "B008"]
 # B008: typer.Option() in defaults is the idiomatic Typer parameter pattern.
 "penny/cli.py" = ["B008"]
-"penny/admin.py" = ["B008"]
 # B008: FastAPI Depends()/Query() in defaults is the idiomatic parameter pattern.
 "penny/api/main.py" = ["B008"]
-"penny/api/billing_routes.py" = ["B008"]
-"penny/api/household_routes.py" = ["B008"]
 
 [lint.isort]
 known-first-party = ["penny"]
