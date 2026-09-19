@@ -140,6 +140,33 @@ class AmazonMutationPlugin:
         # Scrape order must not change which item receives a rounding cent.
         items = sorted(self._index.get_items(order_id), key=lambda item: item.asin)
 
+        # Historical splits used scrape order for rounding ties. Reuse that
+        # order only when each item has one unambiguous existing counterpart;
+        # still recompute amounts so actual price changes cannot be hidden.
+        old_positions = {
+            (row.items[0].description, row.items[0].quantity): row.split_index
+            for row in old_derived
+            if row.split_source == "amazon_mutation"
+            and row.split_index is not None
+            and len(row.items) == 1
+            and row.items[0].source_ref == order_id
+        }
+        item_keys = [
+            (
+                item.description[:200] if item.description else "Amazon item",
+                item.quantity,
+            )
+            for item in items
+        ]
+        if len(old_positions) == len(items) and set(old_positions) == set(item_keys):
+            items = [
+                item
+                for _, item in sorted(
+                    zip(item_keys, items, strict=True),
+                    key=lambda pair: old_positions[pair[0]],
+                )
+            ]
+
         self._logger.match_found(
             plaid_txn.plaid_transaction_id,
             order_id,
