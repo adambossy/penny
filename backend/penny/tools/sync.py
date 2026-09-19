@@ -20,7 +20,9 @@ async def sync_transactions(count: int = 250) -> dict[str, Any]:
     """Sync the latest transactions from every connected Plaid item.
 
     Categorizes new and modified transactions and persists them. Cursor
-    state is tracked per item so subsequent calls are incremental.
+    state is tracked per item so subsequent calls are incremental. Changed
+    source data affecting verified rows is preserved and reported in
+    ``mutation_conflicts``; other transactions continue syncing.
 
     Args:
         count: Max transactions per page. Default 250.

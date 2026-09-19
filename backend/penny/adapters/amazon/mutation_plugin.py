@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -138,7 +137,8 @@ class AmazonMutationPlugin:
         if not order:
             return MutationResult(derived_data_list=[], handled=False)
 
-        items = self._index.get_items(order_id)
+        # Scrape order must not change which item receives a rounding cent.
+        items = sorted(self._index.get_items(order_id), key=lambda item: item.asin)
 
         self._logger.match_found(
             plaid_txn.plaid_transaction_id,
@@ -207,38 +207,6 @@ class AmazonMutationPlugin:
             len(result_list),
             [d.external_id for d in result_list],
         )
-
-        # Preserve enrichments if old_derived has matching count
-        if old_derived and len(old_derived) == len(result_list):
-            preserved: list[DerivedTransactionPayload] = []
-            for new_payload, old in zip(result_list, old_derived, strict=True):
-                category_id = new_payload.category_id
-                category_model = new_payload.category_model
-                category_method = new_payload.category_method
-                category_assigned_at = new_payload.category_assigned_at
-                is_verified = old.is_verified
-                merchant_id = new_payload.merchant_id
-
-                if old.is_verified and old.category_id is not None:
-                    category_id = old.category_id
-                    category_model = old.category_model
-                    category_method = old.category_method
-                    category_assigned_at = old.category_assigned_at
-                if old.merchant_id is not None:
-                    merchant_id = old.merchant_id
-
-                preserved.append(
-                    dataclasses.replace(
-                        new_payload,
-                        merchant_id=merchant_id,
-                        category_id=category_id,
-                        category_model=category_model,
-                        category_method=category_method,
-                        category_assigned_at=category_assigned_at,
-                        is_verified=is_verified,
-                    )
-                )
-            result_list = preserved
 
         return MutationResult(
             derived_data_list=result_list,

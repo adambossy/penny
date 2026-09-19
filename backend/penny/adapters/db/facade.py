@@ -2208,6 +2208,7 @@ class DB:
                 .filter(
                     DerivedTransaction.plaid_transaction_id.in_(plaid_transaction_ids)
                 )
+                .options(joinedload(DerivedTransaction.items))
                 .all()
             )
             for txn in derived_txns:

@@ -265,9 +265,8 @@ def test_mutate_batch_plaid_transaction_immutability(
 def test_mutate_batch_skips_rederive_when_verified_row_exists(
     tmp_path: Path,
 ) -> None:
-    """A plaid_txn with a verified derived row is skipped; row is preserved and
-    a WARNING is emitted."""
-    from loguru import logger
+    """An identical verified transaction is a no-op, not a conflict."""
+    from penny.tools._services.mutation_reconciliation import MutationReport
 
     # input
     account_id = "acct-verified"
@@ -297,25 +296,11 @@ def test_mutate_batch_skips_rederive_when_verified_row_exists(
 
     original_amount = _fetch_derived_amounts(db, plaid_id)[0]
 
-    # Capture warnings
-    captured_messages: list[str] = []
-
-    def _capture_sink(message: object) -> None:
-        captured_messages.append(str(message))
-
-    sink_id = logger.add(_capture_sink, level="WARNING", format="{message}")
-    try:
-        # act — second sync; without protection the sign flip destroys the verified row
-        sync_tool._mutate_batch_to_derived([plaid_id])
-    finally:
-        logger.remove(sink_id)
-
-    # expected — row is unchanged (bank-sign amount preserved)
+    report = MutationReport()
+    sync_tool._mutate_batch_to_derived([plaid_id], report=report)
     assert _fetch_derived_amounts(db, plaid_id) == [original_amount]
-    # A WARNING mentioning the plaid_transaction_id must have been emitted
-    assert any(str(plaid_id) in msg for msg in captured_messages), (
-        f"Expected WARNING mentioning plaid_id={plaid_id}; got: {captured_messages}"
-    )
+    assert report.unchanged == [plaid_id]
+    assert report.conflicts == []
 
 
 def test_mutate_batch_investment_expense_negative_derived_negated(

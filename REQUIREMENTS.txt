@@ -29,6 +29,11 @@ P1. Transaction sync
     a plain-text banner, and in chat as an inline Plaid relink card (update
     mode) that restores the existing connection so syncing resumes.
 
+    Source changes that would replace verified derived rows preserve the entire
+    parent transaction group. Sync continues processing other transactions and
+    returns aggregated mutation_conflicts with parent/derived IDs and existing
+    versus proposed itemization so the agent or user can resolve them.
+
 P2. Categorization
     Categorize each transaction with an LLM against the two-level taxonomy.
     Split transactions (e.g. itemized Amazon orders) are categorized per line.
@@ -72,6 +77,12 @@ P5. Amazon itemization
     never negative, so a detail page that fails or returns nothing degrades
     a transaction's itemization (equal split, or one line item) rather than
     corrupting it.
+
+    Repeated itemization with the same order references, descriptions, quantities,
+    dates, and allocated amounts is a no-op, regardless of item ordering or user
+    categorization. Existing row IDs, verification, and attached user data survive.
+    Remutation dry-run and apply use the same comparison and conflict protection;
+    results distinguish unchanged groups, changed groups, and protected conflicts.
 
     Real ASINs cannot come from the LLM extraction step: Stagehand's
     `extract` sees only an accessibility tree with no link targets, so it
