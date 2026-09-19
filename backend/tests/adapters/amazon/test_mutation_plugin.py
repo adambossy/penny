@@ -635,3 +635,17 @@ def test_legacy_rounding_order_is_preserved_but_price_changes_are_detected(
     assert len(report.conflicts) == 1
     assert _snapshot(db, pid) == before
 
+
+def test_matching_ties_do_not_depend_on_batch_order(tmp_path: Path) -> None:
+    db = _create_db(tmp_path)
+    first = _insert_plaid_txn(db)
+    second = _insert_plaid_txn(db, external_id="same-date-amount")
+    _seed_amazon_order(db, 6000)
+    txns = db.get_plaid_transactions_by_ids([first, second])
+    plugin = AmazonMutationPlugin(db, AmazonMutationPluginConfig())
+    plugin.initialize([txns[second], txns[first]])
+    assert plugin.should_handle(txns[first])
+    assert not plugin.should_handle(txns[second])
+    plugin.initialize([txns[first], txns[second]])
+    assert plugin.should_handle(txns[first])
+    assert not plugin.should_handle(txns[second])

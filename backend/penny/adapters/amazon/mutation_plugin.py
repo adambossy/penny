@@ -87,6 +87,9 @@ class AmazonMutationPlugin:
             self._plaid_id_to_order_id = {}
             return
 
+        # Equal-date/amount candidates must match identically in preview and
+        # apply, even when their database query orders differ.
+        amazon_txns.sort(key=lambda txn: txn.plaid_transaction_id)
         self._logger.matching_start(len(amazon_txns), len(plaid_txns))
 
         # Match orders to transactions
