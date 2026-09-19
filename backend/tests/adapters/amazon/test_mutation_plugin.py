@@ -566,3 +566,72 @@ def test_late_item_detail_is_change_even_when_amount_and_descriptor_match(
     rows = db.get_derived_by_plaid_ids([plaid_id])[plaid_id]
     assert len(rows[0].items) == (0 if verified else 1)
     assert len(result["mutation_conflicts"]) == (1 if verified else 0)
+
+
+def test_legacy_rounding_order_is_preserved_but_price_changes_are_detected(
+    tmp_path: Path,
+) -> None:
+    from penny.adapters.amazon.entities import AmazonItem, AmazonOrder
+    from penny.adapters.amazon.splitter import split_order_to_derived
+    from penny.tools._services.mutation_plugin import (
+        DerivedTransactionPayload,
+        TransactionItemPayload,
+    )
+    from penny.tools._services.mutation_reconciliation import MutationReport
+
+    db = _create_db(tmp_path)
+    pid = _insert_plaid_txn(db, amount_cents=201)
+    profile = db.create_amazon_login_profile(
+        profile_key="primary", display_name="Primary"
+    )
+    db.upsert_amazon_order(
+        "legacy", date(2026, 2, 8), 201, profile_id=profile.profile_id
+    )
+    items = [
+        AmazonItem("legacy", "Mouse", 100, 1, "B002"),
+        AmazonItem("legacy", "Book", 100, 1, "B001"),
+    ]
+    for item in items:
+        db.upsert_amazon_item(
+            item.order_id, item.asin, item.description, item.price_cents
+        )
+    plaid = db.get_plaid_transactions_by_ids([pid])[pid]
+    old = split_order_to_derived(
+        plaid, AmazonOrder("legacy", date(2026, 2, 8), 201, 0, 0), items
+    )
+    db.bulk_insert_derived_transactions(
+        [
+            DerivedTransactionPayload(
+                plaid_transaction_id=pid,
+                external_id=row.external_id,
+                amount_cents=row.amount_cents,
+                posted_at=row.posted_at,
+                merchant_descriptor=row.merchant_descriptor,
+                is_verified=True,
+                split_source="amazon_mutation",
+                split_group_id="legacy",
+                split_index=idx,
+                items=[
+                    TransactionItemPayload(
+                        description=items[idx].description,
+                        amount_cents=row.amount_cents,
+                        source_ref="legacy",
+                    )
+                ],
+            )
+            for idx, row in enumerate(old)
+        ]
+    )
+    before = _snapshot(db, pid)
+    tool = _sync_tool(db)
+    report = MutationReport()
+    tool._mutate_batch_to_derived([pid], report=report)
+    assert report.unchanged == [pid]
+    assert report.conflicts == []
+    assert _snapshot(db, pid) == before
+    db.upsert_amazon_item("legacy", "B002", "Mouse", 120)
+    report = MutationReport()
+    tool._mutate_batch_to_derived([pid], report=report)
+    assert len(report.conflicts) == 1
+    assert _snapshot(db, pid) == before
+
