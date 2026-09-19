@@ -3814,11 +3814,11 @@ class DB:
         ]
 
     def _pending_day(self, session: Session, before: date | None = None) -> date | None:
-        """The newest sync day with unreviewed rows (older than ``before``)."""
-        day = func.date(DerivedTransaction.created_at)
+        """The newest posted day with unreviewed rows (older than ``before``)."""
+        day = DerivedTransaction.posted_at
         query = session.query(func.max(day)).filter(*self._pending_review_filters())
         if before is not None:
-            query = query.filter(day < before.isoformat())
+            query = query.filter(day < before)
         found = query.scalar()
         # SQLite returns the date as a string; Postgres as a date.
         return date.fromisoformat(found) if isinstance(found, str) else found
@@ -3830,13 +3830,15 @@ class DB:
         all_days: bool = False,
         limit: int = 200,
     ) -> dict[str, Any]:
-        """One sync day's worth of unreviewed transactions — the review batch.
+        """One posted day's worth of unreviewed transactions — the review batch.
 
-        A day is the unit on purpose: a sync brings in a handful of
+        A day is the unit on purpose: a day brings in a handful of
         transactions, which is a sitting's worth of labeling with a visible
         end. Handing over the whole backlog instead turns a two-minute habit
-        into a chore nobody starts. ``day`` picks a specific one, ``all_days``
-        opens the floodgates for a deliberate catch-up session.
+        into a chore nobody starts. The day is the transaction's own date, so
+        the batches read in the order the spending happened rather than the
+        order a sync happened to deliver it. ``day`` picks a specific one,
+        ``all_days`` opens the floodgates for a deliberate catch-up session.
 
         Returns the batch plus what the page needs to offer the next one:
         the day shown, the count still pending beyond it, and the next older
@@ -3867,7 +3869,7 @@ class DB:
     def _pending_review_rows(
         self, session: Session, day: date | None, limit: int
     ) -> list[dict[str, Any]]:
-        """Unreviewed rows for one sync day (all days when ``day`` is None).
+        """Unreviewed rows for one posted day (all days when ``day`` is None).
 
         Each row carries what a reviewer needs to judge it — the descriptor and
         Plaid's fuller ``raw_name``, the amount/date, the categorizer's current
@@ -3903,12 +3905,10 @@ class DB:
             .filter(*self._pending_review_filters())
         )
         if day is not None:
-            query = query.filter(
-                func.date(DerivedTransaction.created_at) == day.isoformat()
-            )
+            query = query.filter(DerivedTransaction.posted_at == day)
         rows = (
             query.order_by(
-                DerivedTransaction.created_at.desc(),
+                DerivedTransaction.posted_at.desc(),
                 DerivedTransaction.transaction_id.desc(),
             )
             .limit(limit)

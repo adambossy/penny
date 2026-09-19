@@ -86,7 +86,7 @@ _STYLE = """
 
 
 def render_review_page(batch: dict[str, Any], categories: list[dict[str, str]]) -> str:
-    """The labeling page: one sync day's batch, prefilled with the agent's picks."""
+    """The labeling page: one posted day's batch, prefilled with the agent's picks."""
     rows = batch["rows"]
     day = batch.get("day")
     older_day, older_pending = batch.get("older_day"), batch.get("older_pending") or 0
@@ -111,7 +111,7 @@ def render_review_page(batch: dict[str, Any], categories: list[dict[str, str]]) 
             f"<p>{next_link}</p></div>"
         )
     else:
-        scope = f"synced {html.escape(day)}" if day else "all pending"
+        scope = f"posted {html.escape(day)}" if day else "all pending"
         body = f"""
 <div class="bar">
   <span class="count"><span id="left">{len(rows)}</span> to review</span>

@@ -47,8 +47,8 @@ def build_review_router() -> APIRouter:
 
     @router.get("/review", response_class=HTMLResponse, include_in_schema=False)
     async def review_page(day: str | None = None, all: bool = False) -> HTMLResponse:
-        """One sync day's batch by default; ``?day=`` picks one, ``?all=1`` opens
-        the whole backlog for a deliberate catch-up session."""
+        """One posted day's batch by default; ``?day=`` picks one, ``?all=1``
+        opens the whole backlog for a deliberate catch-up session."""
         from penny.api.review_page import render_review_page
         from penny.db import get_db
 

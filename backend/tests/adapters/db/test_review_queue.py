@@ -42,6 +42,7 @@ def _txn(
     reporting_mode: str | None = None,
     is_hidden: bool = False,
     plaid_category: dict | None = None,
+    posted: date = date(2026, 1, 10),
 ) -> int:
     with get_db().session() as session:
         plaid = PlaidTransaction(
@@ -49,7 +50,7 @@ def _txn(
             source="PLAID",
             account_id="acct-1",
             item_id=None,
-            posted_at=date(2026, 1, 10),
+            posted_at=posted,
             amount_cents=1234,
             currency="USD",
             personal_finance_category=plaid_category,
@@ -60,7 +61,7 @@ def _txn(
             plaid_transaction_id=plaid.plaid_transaction_id,
             external_id=f"d-{ext}",
             amount_cents=1234,
-            posted_at=date(2026, 1, 10),
+            posted_at=posted,
             merchant_descriptor=descriptor,
             category_id=category_id,
             category_method=method if category_id is not None else None,
@@ -151,20 +152,10 @@ def test_fast_path_verified_rows_are_not_mistaken_for_human_labels(
     assert db.review_scoreboard()["reviewed"] == 0
 
 
-def _sync_day(transaction_id: int, day: date) -> None:
-    """Backdate a row's sync timestamp so it lands in an earlier batch."""
-    from datetime import datetime
-
-    with get_db().session() as session:
-        session.get(DerivedTransaction, transaction_id).created_at = datetime(
-            day.year, day.month, day.day, 12, 0
-        )
-
-
-def test_batch_is_one_sync_day_not_the_whole_backlog(
+def test_batch_is_one_posted_day_not_the_whole_backlog(
     isolated_db: pytest.FixtureRequest,
 ) -> None:
-    """A sitting is a sync's worth of work, with the rest reachable but not shown.
+    """A sitting is a day's worth of work, with the rest reachable but not shown.
 
     Handing over every unreviewed transaction at once is what makes labeling a
     chore nobody starts; the backlog stays one deliberate click away.
@@ -173,10 +164,8 @@ def test_batch_is_one_sync_day_not_the_whole_backlog(
     db.create_schema()
     groceries = _category("food.groceries", "Groceries")
     today = _txn("today", category_id=groceries)
-    older = _txn("older", category_id=groceries)
-    oldest = _txn("oldest", category_id=groceries)
-    _sync_day(older, date(2026, 1, 9))
-    _sync_day(oldest, date(2026, 1, 8))
+    older = _txn("older", category_id=groceries, posted=date(2026, 1, 9))
+    _txn("oldest", category_id=groceries, posted=date(2026, 1, 8))
 
     batch = db.review_batch()
 
@@ -196,6 +185,21 @@ def test_batch_is_one_sync_day_not_the_whole_backlog(
     assert every["day"] is None
 
 
+def test_batch_lists_the_most_recent_transactions_first(
+    isolated_db: pytest.FixtureRequest,
+) -> None:
+    """Newest by transaction date, not by the order the sync happened to insert."""
+    db = get_db()
+    db.create_schema()
+    groceries = _category("food.groceries", "Groceries")
+    old = _txn("old", category_id=groceries, posted=date(2026, 1, 3))
+    new = _txn("new", category_id=groceries, posted=date(2026, 1, 10))
+
+    rows = db.review_batch(all_days=True)["rows"]
+
+    assert [r["transaction_id"] for r in rows] == [new, old]
+
+
 def test_batch_moves_on_once_a_day_is_labeled(
     isolated_db: pytest.FixtureRequest,
 ) -> None:
@@ -203,12 +207,11 @@ def test_batch_moves_on_once_a_day_is_labeled(
     db.create_schema()
     groceries = _category("food.groceries", "Groceries")
     today = _txn("today", category_id=groceries)
-    older = _txn("older", category_id=groceries)
-    _sync_day(older, date(2026, 1, 9))
+    older = _txn("older", category_id=groceries, posted=date(2026, 1, 9))
 
     db.mark_transaction_reviewed(today, groceries)
 
-    # The newest day with work left becomes the batch.
+    # The newest posted day with work left becomes the batch.
     batch = db.review_batch()
     assert [r["transaction_id"] for r in batch["rows"]] == [older]
     assert batch["older_day"] is None
