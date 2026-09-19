@@ -16,11 +16,13 @@ from collections.abc import Callable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
-from loguru import logger
-
 from penny.adapters.amazon import (
     AmazonMutationPlugin,
     AmazonMutationPluginConfig,
+)
+from penny.tools._services.mutation_reconciliation import (
+    MutationReport,
+    assess_mutation,
 )
 
 if TYPE_CHECKING:
@@ -34,7 +36,9 @@ class SupportsRemutation(Protocol):
     real ``SyncTool`` (which needs Plaid + OpenAI credentials).
     """
 
-    def _mutate_batch_to_derived(self, plaid_ids: list[int]) -> list[int]: ...
+    def _mutate_batch_to_derived(
+        self, plaid_ids: list[int], *, report: MutationReport | None = None
+    ) -> list[int]: ...
 
     async def _categorize_derived(self, derived_ids: list[int]) -> None: ...
 
@@ -66,9 +70,14 @@ def _result(
     derived_after_split: int = 0,
     categorized: int = 0,
     dry_run: bool = False,
+    report: MutationReport | None = None,
 ) -> dict[str, Any]:
     """Build the remutation result contract (flat dict, mirrors scraper)."""
+    report = report or MutationReport()
     return {
+        "unchanged": len(report.unchanged),
+        "changed": len(report.changed),
+        "mutation_conflicts": report.conflicts,
         "status": status,
         "candidates": candidates,
         "matched": matched,
@@ -95,7 +104,7 @@ def remutate_amazon_orders(
             without writing anything.
         sync_tool_factory: Optional factory producing the object that performs
             mutation + categorization. Defaults to a real ``SyncTool``. Only
-            invoked on a non-dry run with at least one match.
+            invoked on a non-dry run with at least one safe change.
 
     Returns:
         Result-contract dict with status, counts, and overwrite details.
@@ -124,6 +133,15 @@ def remutate_amazon_orders(
 
     # The plugin filters to Amazon-descriptor txns internally and matches them
     # to scraped orders by amount + date lag.
+    from penny.tools._services.sync_service import _apply_sign_convention
+
+    conventions = db.bulk_get_sign_conventions(list({t.account_id for t in plaid_txns}))
+    plaid_txns = [
+        _apply_sign_convention(
+            t, sign_convention=conventions.get(t.account_id, "expense_positive")
+        )
+        for t in plaid_txns
+    ]
     plugin = AmazonMutationPlugin(db, config)
     plugin.initialize(plaid_txns)
     matched_plaid_ids = sorted(
@@ -141,65 +159,67 @@ def remutate_amazon_orders(
         )
 
     derived_map = db.get_derived_by_plaid_ids(matched_plaid_ids)
-    overwrite_details: list[dict[str, Any]] = []
-    for plaid_id, drvs in derived_map.items():
-        for drv in drvs:
-            if drv.is_verified or drv.category_method == "manual":
-                overwrite_details.append(
-                    {
-                        "plaid_transaction_id": plaid_id,
-                        "derived_transaction_id": drv.transaction_id,
-                        "posted_at": drv.posted_at.isoformat(),
-                        "amount_cents": drv.amount_cents,
-                        "is_verified": drv.is_verified,
-                        "category_method": drv.category_method,
-                        "category_id": drv.category_id,
-                        "merchant_descriptor": drv.merchant_descriptor,
-                    }
-                )
-    overwrites = len(overwrite_details)
-    if overwrites:
-        logger.warning(
-            "{} manually-categorized/verified derived row(s) will be deleted "
-            "and replaced by Amazon splits",
-            overwrites,
+    report = MutationReport()
+    for txn in plaid_txns:
+        if plugin.should_handle(txn):
+            existing = derived_map.get(txn.plaid_transaction_id, [])
+            proposed = plugin.process(txn, existing).derived_data_list
+            assess_mutation(txn.plaid_transaction_id, existing, proposed, report)
+
+    if not dry_run and report.changed:
+        factory = sync_tool_factory or _default_sync_tool
+        runner = factory(db)
+        # Recheck at the mutation seam, including verification, before writing.
+        report = MutationReport()
+        derived_ids = runner._mutate_batch_to_derived(matched_plaid_ids, report=report)
+        changed_ids = set(report.changed)
+        changed_rows = [
+            row
+            for row in db.get_derived_transactions_by_ids(derived_ids)
+            if row.plaid_transaction_id in changed_ids
+        ]
+        uncategorized_ids = [
+            row.transaction_id for row in changed_rows if row.category_id is None
+        ]
+        asyncio.run(runner._categorize_derived(uncategorized_ids))
+        derived_after_split = len(changed_rows)
+        categorized = sum(
+            row.category_id is not None
+            for row in db.get_derived_transactions_by_ids(uncategorized_ids)
         )
+    else:
+        derived_after_split = 0
+        categorized = 0
 
-    if dry_run:
-        return _result(
-            status="dry_run",
-            message=(
-                f"Dry run: {matched} of {candidates} Plaid txns would be split; "
-                f"{overwrites} manual/verified row(s) would be replaced."
-            ),
-            candidates=candidates,
-            matched=matched,
-            overwrites=overwrites,
-            overwrite_details=overwrite_details,
-            dry_run=True,
-        )
-
-    factory = sync_tool_factory or _default_sync_tool
-    runner = factory(db)
-
-    logger.info("Re-mutating {} Plaid txns", matched)
-    new_derived_ids = runner._mutate_batch_to_derived(matched_plaid_ids)
-    # Mirror the sync flow, which categorizes immediately after mutation. The
-    # plugin sets category_id=None on freshly split rows; without this they
-    # would persist uncategorized.
-    asyncio.run(runner._categorize_derived(new_derived_ids))
-
+    overwrite_details = [
+        {
+            "plaid_transaction_id": plaid_id,
+            "derived_transaction_id": row.transaction_id,
+            "posted_at": row.posted_at.isoformat(),
+            "amount_cents": row.amount_cents,
+            "merchant_descriptor": row.merchant_descriptor,
+            "category_id": row.category_id,
+            "category_method": row.category_method,
+            "is_verified": row.is_verified,
+        }
+        for plaid_id in report.changed
+        for row in derived_map.get(plaid_id, [])
+        if row.category_method == "manual"
+    ]
     return _result(
-        status="ok",
+        status="dry_run" if dry_run else ("ok" if report.changed else "noop"),
         message=(
-            f"Split {matched} Plaid txns into {len(new_derived_ids)} derived "
-            f"rows and categorized them; {overwrites} manual/verified row(s) "
-            "replaced."
+            f"{len(report.changed)} Plaid transactions "
+            f"{'would change' if dry_run else 'changed'}; "
+            f"{len(report.unchanged)} unchanged; "
+            f"{len(report.conflicts)} conflicts preserved for review."
         ),
         candidates=candidates,
         matched=matched,
-        overwrites=overwrites,
+        overwrites=len(overwrite_details),
         overwrite_details=overwrite_details,
-        derived_after_split=len(new_derived_ids),
-        categorized=len(new_derived_ids),
+        derived_after_split=derived_after_split,
+        categorized=categorized,
+        dry_run=dry_run,
+        report=report,
     )

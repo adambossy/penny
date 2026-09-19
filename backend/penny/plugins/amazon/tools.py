@@ -270,9 +270,10 @@ async def scrape_amazon_orders(
 async def remutate_amazon_orders(dry_run: bool = True) -> dict[str, Any]:
     """Re-split previously-persisted Plaid transactions against scraped Amazon orders.
 
-    Destructive: matched Plaid txns have their existing derived rows
-    deleted and replaced. ``dry_run`` defaults to True; inspect a dry-run
-    result before applying.
+    Unchanged splits are left intact. Changed splits containing verified rows
+    are preserved and returned in mutation_conflicts; other changed splits are
+    replaced and categorized. Conflicts do not stop the batch. ``dry_run``
+    defaults to True; inspect a dry-run result before applying.
     """
 
     def _run() -> dict[str, Any]:

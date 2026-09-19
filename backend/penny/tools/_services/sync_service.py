@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from copy import copy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import TYPE_CHECKING, Any, cast
 
@@ -30,10 +30,14 @@ from penny.tools._services.investment_classification import (
     investment_activity_reporting_mode,
 )
 from penny.tools._services.mutation_plugin import DerivedTransactionPayload
+from penny.tools._services.mutation_reconciliation import (
+    MutationReport,
+    assess_mutation,
+)
 from penny.tools._services.mutation_registry import MutationRegistry
 
 if TYPE_CHECKING:
-    from penny.adapters.db.models import DerivedTransaction, PlaidItem, PlaidTransaction
+    from penny.adapters.db.models import PlaidItem, PlaidTransaction
 
 
 # Max concurrent per-descriptor categorizations during the end-of-sync sweep.
@@ -96,6 +100,7 @@ class SyncResult:
     has_more: bool
     added_count: int = 0
     modified_count: int = 0
+    mutation_conflicts: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -106,6 +111,7 @@ class SyncSummary:
     total_modified: int
     total_removed: int
     items_synced: int
+    mutation_conflicts: list[dict[str, Any]] = field(default_factory=list)
     investment_added: int = 0
     investment_skipped_excluded: int = 0
     investment_deduped: int = 0
@@ -118,6 +124,7 @@ class SyncSummary:
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
         result: dict[str, Any] = {
+            "mutation_conflicts": self.mutation_conflicts,
             "total_added": self.total_added,
             "total_modified": self.total_modified,
             "total_removed": self.total_removed,
@@ -482,6 +489,7 @@ class SyncTool:
             total_modified=sum(r.modified_count for r in results),
             total_removed=sum(len(r.removed_transaction_ids) for r in results),
             items_synced=items_synced,
+            mutation_conflicts=[c for r in results for c in r.mutation_conflicts],
         )
 
     async def _sync_investments_for_item(
@@ -1001,6 +1009,7 @@ class SyncTool:
             final_cursor="",
             pages_fetched=0,
         )
+        mutation_report = MutationReport()
         all_derived_ids: list[int] = []
         pipeline_error: list[Exception] = []  # Mutable container for error propagation
 
@@ -1146,7 +1155,10 @@ class SyncTool:
                         list(plaid_txns_map.values())
                     )
                     derived_ids = self._mutate_batch_to_derived(
-                        plaid_ids, merchant_id_by_input, plaid_txns_map
+                        plaid_ids,
+                        merchant_id_by_input,
+                        plaid_txns_map,
+                        report=mutation_report,
                     )
                     elapsed_ms = int((time.monotonic() - start_time) * 1000)
                     self._logger.pipeline_mutate_complete(
@@ -1190,7 +1202,9 @@ class SyncTool:
         # deduped across items and guarded by the run lock.
         _ = all_derived_ids
 
-        return [self._build_sync_result_from_accumulated(accumulated)]
+        result = self._build_sync_result_from_accumulated(accumulated)
+        result.mutation_conflicts = mutation_report.conflicts
+        return [result]
 
     def _persist_batch_to_plaid(
         self, batch: list[Transaction], item_id: str
@@ -1252,6 +1266,8 @@ class SyncTool:
         plaid_ids: list[int],
         merchant_id_by_input: dict[str, int] | None = None,
         plaid_txns_map: dict[int, PlaidTransaction] | None = None,
+        *,
+        report: MutationReport | None = None,
     ) -> list[int]:
         """
         Create derived transactions for a batch of plaid_transaction_ids.
@@ -1271,10 +1287,14 @@ class SyncTool:
             plaid_txns_map: Optional pre-fetched plaid rows for ``plaid_ids``
                 (the async pipeline already fetched them to resolve merchants).
                 Fetched here when omitted.
+            report: Optional collector for unchanged/changed parent IDs and
+                protected conflicts. Conflicts never abort the batch.
 
         Returns:
-            List of derived transaction_ids that were created
+            IDs of retained and newly created derived rows.
         """
+        if report is None:
+            report = MutationReport()
         # Batch fetch all plaid transactions and old derived in 2 queries
         if plaid_txns_map is None:
             plaid_txns_map = self._db.get_plaid_transactions_by_ids(plaid_ids)
@@ -1329,36 +1349,12 @@ class SyncTool:
 
             old_derived = old_derived_map.get(plaid_id, [])
 
-            # Guard verified rows: if any old derived row is verified, skip the
-            # cascade delete. Destroying verified rows on re-sync would silently
-            # drop data the user manually validated.
-            if old_derived and any(row.is_verified for row in old_derived):
-                verified_count = sum(1 for row in old_derived if row.is_verified)
-                logger.bind(
-                    plaid_transaction_id=plaid_id,
-                    verified_count=verified_count,
-                ).warning(
-                    "skipping re-derive for plaid_transaction_id={}; {} verified "
-                    "rows would be affected; verified rows are immutable.",
-                    plaid_id,
-                    verified_count,
-                )
-                unchanged_derived_ids.extend(row.transaction_id for row in old_derived)
-                continue
-
             normalized_txn = normalized_views[plaid_id]
-
-            # Use registry to process (returns N derived for plugins, 1 for default)
             result = self._mutation_registry.process(normalized_txn, old_derived)
-
-            # Skip delete+reinsert when derived data is unchanged (1:1 only)
-            if (
-                old_derived
-                and len(old_derived) == 1
-                and len(result.derived_data_list) == 1
-                and self._derived_unchanged(old_derived[0], result.derived_data_list[0])
+            if not assess_mutation(
+                plaid_id, old_derived, result.derived_data_list, report
             ):
-                unchanged_derived_ids.append(old_derived[0].transaction_id)
+                unchanged_derived_ids.extend(row.transaction_id for row in old_derived)
                 continue
 
             all_new_derived_data.extend(result.derived_data_list)
@@ -1435,22 +1431,6 @@ class SyncTool:
                 counterparty=merchant.counterparty,
             )
         return merchant_id_by_input
-
-    @staticmethod
-    def _derived_unchanged(
-        old: DerivedTransaction,
-        new_payload: DerivedTransactionPayload,
-    ) -> bool:
-        """Check if derived transaction data is unchanged.
-
-        Compares the core fields that come from Plaid (amount, date,
-        merchant descriptor). If all match, the mutation can be skipped.
-        """
-        return (
-            old.amount_cents == new_payload.amount_cents
-            and old.posted_at == new_payload.posted_at
-            and old.merchant_descriptor == new_payload.merchant_descriptor
-        )
 
     def _get_excluded_account_id(self, access_token: str) -> str | None:
         """Get account_id for 'CORP Account - JOIA' if it exists.

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+
+import pytest
 
 from penny.adapters.amazon.mutation_plugin import (
     AmazonMutationPlugin,
@@ -300,3 +302,267 @@ def test_amazon_mutation_resync_idempotent_via_delete_facade(tmp_path: Path) -> 
         "derived_count": len(second_ids),
         "total_item_count": sum(_count_items(db, tid) for tid in second_ids),
     } == expected_output
+
+
+def _sync_tool(db: DB):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from penny.tools._services.sync_service import SyncTool
+
+    tool = SyncTool(
+        plaid_client=MagicMock(),
+        categorizer_factory=MagicMock(),
+        db=db,
+        taxonomy=MagicMock(),
+    )
+    tool._categorize_derived = AsyncMock()
+    return tool
+
+
+def _snapshot(db: DB, plaid_id: int) -> list[tuple]:
+    return sorted(
+        (
+            row.transaction_id,
+            row.category_id,
+            row.is_verified,
+            row.category_method,
+            row.split_group_id,
+            row.is_hidden,
+            tuple(
+                sorted(
+                    (i.item_id, i.source_ref, i.description, i.quantity, i.amount_cents)
+                    for i in row.items
+                )
+            ),
+        )
+        for row in db.get_derived_by_plaid_ids([plaid_id])[plaid_id]
+    )
+
+
+@pytest.mark.parametrize("sign", [1, -1])
+def test_remutation_identical_scrape_preserves_verified_rows(
+    tmp_path: Path, sign: int
+) -> None:
+    from penny.adapters.db.models import Category
+    from penny.plugins.amazon.remutate import remutate_amazon_orders
+
+    db = _create_db(tmp_path)
+    db.set_sign_convention(
+        "acct-abc", "expense_positive" if sign == 1 else "expense_negative"
+    )
+    plaid_id = _insert_plaid_txn(db, amount_cents=6000 * sign)
+    order_id = _seed_amazon_order(db, 6000)
+    tool = _sync_tool(db)
+    ids = tool._mutate_batch_to_derived([plaid_id])
+    with db.session() as session:
+        category = Category(key="test.manual", name="Manual")
+        session.add(category)
+        session.flush()
+        row = session.get(DerivedTransaction, ids[0])
+        row.category_id = category.category_id
+        row.category_method = "manual"
+        row.category_assigned_at = datetime(2026, 2, 11)
+        row.is_verified = True
+        row.is_hidden = True
+    before = _snapshot(db, plaid_id)
+    # Repeat the scrape in a different order; timestamps change but content does not.
+    for asin, description, price in [
+        ("B003", "HDMI Cable", 1500),
+        ("B002", "USB Hub", 2500),
+        ("B001", "Wireless Mouse", 2000),
+    ]:
+        db.upsert_amazon_item(order_id, asin, description, price)
+    for dry_run in (True, False):
+        result = remutate_amazon_orders(
+            db,
+            dry_run=dry_run,
+            sync_tool_factory=lambda _: tool,
+        )
+        assert result["unchanged"] == 1
+        assert result["changed"] == 0
+        assert result["mutation_conflicts"] == []
+        assert result["overwrites"] == 0
+        assert _snapshot(db, plaid_id) == before
+    tool._categorize_derived.assert_not_called()
+
+
+def test_remutation_conflict_does_not_block_other_changes(tmp_path: Path) -> None:
+    from penny.plugins.amazon.remutate import remutate_amazon_orders
+
+    db = _create_db(tmp_path)
+    protected_id = _insert_plaid_txn(db)
+    order_id = _seed_amazon_order(db, 6000)
+    tool = _sync_tool(db)
+    ids = tool._mutate_batch_to_derived([protected_id])
+    with db.session() as session:
+        session.get(DerivedTransaction, ids[0]).is_verified = True
+    before = _snapshot(db, protected_id)
+    # Changed item data must be reported without replacing the verified group.
+    db.upsert_amazon_item(order_id, "B001", "Wireless Mouse revised", 2000)
+    other_id = _insert_plaid_txn(db, external_id="other", amount_cents=3000)
+    profile = db.list_amazon_orders()[0].profile_id
+    db.upsert_amazon_order("other-order", date(2026, 2, 8), 3000, profile_id=profile)
+    db.upsert_amazon_item("other-order", "B004", "Book", 3000)
+    preview = remutate_amazon_orders(db, dry_run=True)
+    assert preview["changed"] == 1
+    assert len(preview["mutation_conflicts"]) == 1
+    assert db.get_derived_by_plaid_ids([other_id])[other_id] == []
+    result = remutate_amazon_orders(db, sync_tool_factory=lambda _: tool)
+    assert result["mutation_conflicts"] == preview["mutation_conflicts"]
+    assert result["changed"] == 1
+    assert result["derived_after_split"] == 1
+    assert result["overwrites"] == 0
+    conflict = result["mutation_conflicts"][0]
+    assert conflict["plaid_transaction_id"] == protected_id
+    assert conflict["verified_transaction_ids"] == [ids[0]]
+    assert (
+        conflict["proposed"][0]["items"][0]["description"] == "Wireless Mouse revised"
+    )
+    assert _snapshot(db, protected_id) == before
+    new_rows = db.get_derived_by_plaid_ids([other_id])[other_id]
+    assert len(new_rows) == 1
+    tool._categorize_derived.assert_awaited_once_with([new_rows[0].transaction_id])
+
+
+def test_unverified_splits_noop_then_replace_changed_item_data(tmp_path: Path) -> None:
+    from penny.tools._services.mutation_reconciliation import MutationReport
+
+    db = _create_db(tmp_path)
+    plaid_id = _insert_plaid_txn(db)
+    order_id = _seed_amazon_order(db, 6000)
+    tool = _sync_tool(db)
+    tool._mutate_batch_to_derived([plaid_id])
+    before = _snapshot(db, plaid_id)
+    report = MutationReport()
+    tool._mutate_batch_to_derived([plaid_id], report=report)
+    assert report.unchanged == [plaid_id]
+    assert _snapshot(db, plaid_id) == before
+    db.upsert_amazon_item(order_id, "B001", "Wireless Mouse", 1000, quantity=2)
+    report = MutationReport()
+    tool._mutate_batch_to_derived([plaid_id], report=report)
+    assert report.changed == [plaid_id]
+    assert report.conflicts == []
+    rows = db.get_derived_by_plaid_ids([plaid_id])[plaid_id]
+    assert sum(row.amount_cents for row in rows) == 6000
+    assert sorted(i.quantity for row in rows for i in row.items) == [1, 1, 2]
+
+
+async def test_sync_returns_conflicts_across_pages_and_finishes_other_rows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from penny.adapters.db.models import PlaidItem
+    from penny.tools._services.sync_service import SyncTool
+    from penny.tools.sync import sync_transactions
+
+    db = _create_db(tmp_path)
+    plaid_id = _insert_plaid_txn(db)
+    order_id = _seed_amazon_order(db, 6000)
+    tool = _sync_tool(db)
+    ids = tool._mutate_batch_to_derived([plaid_id])
+    with db.session() as session:
+        session.get(DerivedTransaction, ids[0]).is_verified = True
+        session.add(PlaidItem(item_id="item", access_token="test-token"))
+    before = _snapshot(db, plaid_id)
+    second_id = _insert_plaid_txn(
+        db,
+        external_id="second-protected",
+        amount_cents=1000,
+        merchant_descriptor="Grocer",
+    )
+    second_rows = tool._mutate_batch_to_derived([second_id])
+    with db.session() as session:
+        session.get(DerivedTransaction, second_rows[0]).is_verified = True
+    second_before = _snapshot(db, second_id)
+    db.upsert_amazon_item(order_id, "B001", "Changed item", 2000)
+    tool._plaid_client.get_accounts.return_value = []
+    tool._plaid_client.sync_transactions.side_effect = [
+        {
+            "modified": [
+                {
+                    "transaction_id": "plaid-amz-001",
+                    "account_id": "acct-abc",
+                    "date": "2026-02-10",
+                    "amount": 60,
+                    "name": "Amazon",
+                }
+            ],
+            "has_more": True,
+            "next_cursor": "page-2",
+        },
+        {
+            "added": [
+                {
+                    "transaction_id": "unrelated",
+                    "account_id": "acct-abc",
+                    "date": "2026-02-11",
+                    "amount": 7,
+                    "name": "Grocer",
+                }
+            ],
+            "modified": [
+                {
+                    "transaction_id": "second-protected",
+                    "account_id": "acct-abc",
+                    "date": "2026-02-10",
+                    "amount": 12,
+                    "name": "Grocer",
+                }
+            ],
+            "has_more": False,
+            "next_cursor": "done",
+        },
+    ]
+    tool._resolve_merchant_ids = AsyncMock(return_value={})
+    tool._sync_investments_for_item = AsyncMock(return_value=(0, 0, 0, None))
+    tool._categorize_uncategorized = AsyncMock()
+    monkeypatch.setattr(SyncTool, "from_env", lambda: tool)
+    result = await sync_transactions.fn()
+    assert result["status"] == "success"
+    assert result["total_added"] == 1
+    assert result["total_modified"] == 2
+    assert {c["plaid_transaction_id"] for c in result["mutation_conflicts"]} == {
+        plaid_id,
+        second_id,
+    }
+    assert _snapshot(db, second_id) == second_before
+    assert _snapshot(db, plaid_id) == before
+    assert db.get_sync_cursor("item") == "done"
+    with db.session() as session:
+        assert (
+            session.query(DerivedTransaction).filter_by(external_id="unrelated").count()
+            == 1
+        )
+    tool._categorize_uncategorized.assert_awaited_once()
+
+
+@pytest.mark.parametrize("verified", [False, True])
+def test_late_item_detail_is_change_even_when_amount_and_descriptor_match(
+    tmp_path: Path,
+    verified: bool,
+) -> None:
+    from penny.plugins.amazon.remutate import remutate_amazon_orders
+
+    db = _create_db(tmp_path)
+    plaid_id = _insert_plaid_txn(db, merchant_descriptor="Amazon: Book")
+    tool = _sync_tool(db)
+    ids = tool._mutate_batch_to_derived([plaid_id])
+    with db.session() as session:
+        session.get(DerivedTransaction, ids[0]).is_verified = verified
+    profile = db.create_amazon_login_profile(
+        profile_key="primary", display_name="Primary"
+    )
+    db.upsert_amazon_order(
+        "late", date(2026, 2, 8), 6000, profile_id=profile.profile_id
+    )
+    db.upsert_amazon_item("late", "B001", "Book", 6000)
+    preview = remutate_amazon_orders(db, dry_run=True)
+    result = remutate_amazon_orders(db, sync_tool_factory=lambda _: tool)
+    assert result["mutation_conflicts"] == preview["mutation_conflicts"]
+    assert result["unchanged"] == 0
+    assert result["changed"] == (0 if verified else 1)
+    rows = db.get_derived_by_plaid_ids([plaid_id])[plaid_id]
+    assert len(rows[0].items) == (0 if verified else 1)
+    assert len(result["mutation_conflicts"]) == (1 if verified else 0)
