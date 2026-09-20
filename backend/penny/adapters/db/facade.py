@@ -2470,8 +2470,10 @@ class DB:
             the categorizer sweep can read ``txn.plaid_transaction.raw_name``
             after the session closes without a second round trip and without
             hydrating the plaid row's JSON blobs. Other ``plaid_transaction``
-            columns and every other relationship remain deferred/lazy and will
-            raise ``DetachedInstanceError`` if accessed.
+            columns remain deferred. ``items`` is also eager-loaded so the sweep
+            can distinguish itemized rows from ordinary merchant duplicates.
+            Other relationships remain lazy and raise ``DetachedInstanceError``
+            if accessed.
         """
         if not transaction_ids:
             return []
@@ -2482,7 +2484,8 @@ class DB:
                 .options(
                     joinedload(DerivedTransaction.plaid_transaction).load_only(
                         PlaidTransaction.raw_name
-                    )
+                    ),
+                    joinedload(DerivedTransaction.items),
                 )
                 .filter(DerivedTransaction.transaction_id.in_(transaction_ids))
                 .order_by(DerivedTransaction.external_id)  # Deterministic for cache
