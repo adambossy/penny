@@ -37,6 +37,11 @@ P1. Transaction sync
 P2. Categorization
     Categorize each transaction with an LLM against the two-level taxonomy.
     Split transactions (e.g. itemized Amazon orders) are categorized per line.
+    The categorization sweep must not copy a category or rationale between
+    split/itemized rows, even when parent bank descriptors or truncated item
+    descriptions match. Ordinary duplicate reuse must still distinguish raw
+    counterparties (e.g. different Venmo recipients). This does not retroactively
+    repair existing category assignments.
 
 P3. Conversational finance Q&A
     Answer natural-language questions about the user's finances through a

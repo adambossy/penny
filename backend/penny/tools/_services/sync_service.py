@@ -804,10 +804,9 @@ class SyncTool:
         """Categorize derived transactions via the per-transaction agent.
 
         Only rows with ``category_id IS NULL`` are processed (brand-new rows plus
-        any stranded by a prior failed run). Identical merchant descriptors are
-        deduped within the run: the first is decided by ``categorize_one`` (fast
-        path or agent), and the rest reuse that decision via a bulk update — so a
-        merchant that appears N times costs at most one agent run.
+        any stranded by a prior failed run). Split/itemized rows are decided
+        individually. Ordinary rows sharing a raw merchant descriptor reuse the
+        first decision via a bulk update.
 
         Args:
             derived_ids: Candidate derived transaction IDs to categorize.
@@ -832,17 +831,16 @@ class SyncTool:
             pt = txn.plaid_transaction
             return pt.raw_name if pt is not None else None
 
-        # Dedup by raw_name: it is the finer signal the agent actually reads and
-        # it determines merchant_descriptor (which is `merchant_name or name`), so
-        # a compound key would be redundant. Fall back to merchant_descriptor when
-        # raw_name is absent (CSV / pre-backfill rows) so unrelated null-raw_name
-        # rows don't collapse into one group. Trade-off: raw strings carrying
-        # per-transaction tokens (e.g. a Zelle confirmation number) dedup less and
-        # cost an extra agent run — acceptable, and it never merges distinct
-        # counterparties.
-        by_key: dict[str, list[Any]] = defaultdict(list)
+        # A bank descriptor identifies the parent charge, not the products in
+        # its splits. Item descriptors can also be truncated, so neither string
+        # is a safe identity for reusing an item-level category or rationale.
+        # Ordinary rows retain raw-name dedup to distinguish Venmo counterparties.
+        by_key: dict[tuple[str, str | int], list[Any]] = defaultdict(list)
         for txn in to_categorize:
-            key = _raw_name(txn) or txn.merchant_descriptor or ""
+            if txn.split_source is not None or txn.items:
+                key = ("transaction", txn.transaction_id)
+            else:
+                key = ("merchant", _raw_name(txn) or txn.merchant_descriptor or "")
             by_key[key].append(txn)
 
         semaphore = asyncio.Semaphore(_CATEGORIZE_CONCURRENCY)
