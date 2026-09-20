@@ -117,6 +117,7 @@ async def test_agent_run_trace_via_subscriber(exporter):
     root, _ = tree["penny-agent-run"]
     assert root.attributes["session.id"] == "conv-42"
     assert root.attributes["langfuse.observation.input"] == "how much did I spend?"
+    assert root.attributes["langfuse.observation.output"] == "You spent $42."
     assert tuple(root.attributes["langfuse.trace.tags"]) == ("chat",)
     assert root.attributes["langfuse.environment"] == "development"
 
