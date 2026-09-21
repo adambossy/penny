@@ -113,7 +113,10 @@ async def generate_chart(
     return await chart.execute(
         chart_type=chart_type,
         title=title,
-        data=data,
+        # ``generate_chart`` is the agent-facing contract, where data is a
+        # single label-to-number mapping. The renderer also supports multiple
+        # line series, so it expects one additional series-name layer.
+        data={"values": data},
         x_label=x_label,
         y_label=y_label,
     )
