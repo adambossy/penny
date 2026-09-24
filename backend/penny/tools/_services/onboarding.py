@@ -1,6 +1,6 @@
 """Injection seam for the onboarding-resolve op (website-owned persistence).
 
-Resolving an onboarding step writes ``web.onboarding_items`` — website/app state
+Resolving an onboarding step writes ``app_onboarding_items`` — website/app state
 the agent domain must not import (AGENTS.local.md). The website constructs its
 persistence-backed resolver and passes it to ``build_agent``, which threads it
 into the ``resolve_onboarding_item`` tool; the agent domain sees only this
